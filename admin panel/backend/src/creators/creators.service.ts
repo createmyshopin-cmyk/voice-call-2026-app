@@ -34,6 +34,8 @@ export interface Creator {
 export class CreatorsService {
   /** In-memory last_seen when Supabase is unavailable (keyed by user id). */
   private readonly lastSeenByUserId = new Map<string, string>();
+  private readonly memEarnings: any[] = [];
+  private readonly memWallets: any[] = [];
 
   private creators: Creator[] = [
     {
@@ -355,4 +357,279 @@ export class CreatorsService {
       creator,
     };
   }
+
+  async recordEarnings(callId: string, creatorId: string, grossAmount: number) {
+    let platformCommissionPercent = 30.00; // default 30% commission (creator gets 70%)
+
+    if (this.supabase.isConfigured) {
+      try {
+        const { data } = await this.supabase
+          .getClient()
+          .from('app_settings')
+          .select('platform_commission_percent')
+          .limit(1)
+          .maybeSingle();
+
+        if (data && data.platform_commission_percent !== null) {
+          platformCommissionPercent = Number(data.platform_commission_percent);
+        }
+      } catch (e) {
+        console.warn('Failed to retrieve platform commission percent from app_settings:', (e as Error).message);
+      }
+    }
+
+    const platformShare = Number((grossAmount * (platformCommissionPercent / 100)).toFixed(2));
+    const creatorShare = Number((grossAmount - platformShare).toFixed(2));
+
+    let record: any;
+
+    if (this.supabase.isConfigured) {
+      const client = this.supabase.getClient();
+
+      // Log into creator_earnings ledger table
+      const { data: earningData, error: earningErr } = await client
+        .from('creator_earnings')
+        .insert({
+          call_id: callId,
+          creator_id: creatorId,
+          gross_amount: grossAmount,
+          creator_share: creatorShare,
+          platform_share: platformShare,
+        })
+        .select('*')
+        .single();
+
+      if (earningErr) {
+        throw new Error(`Failed to log creator earning: ${earningErr.message}`);
+      }
+
+      record = earningData;
+
+      // Get creator_profile.id to map to creator_wallets.creator_id
+      let creatorProfileId = creatorId;
+      const { data: profile } = await client
+        .from('creator_profiles')
+        .select('id')
+        .eq('user_id', creatorId)
+        .maybeSingle();
+
+      if (profile) {
+        creatorProfileId = profile.id;
+      }
+
+      // Atomic balance update on creator_wallets using creatorProfileId
+      const { data: existingWallet } = await client
+        .from('creator_wallets')
+        .select('*')
+        .eq('creator_id', creatorProfileId)
+        .maybeSingle();
+
+      if (existingWallet) {
+        const newTotalEarned = Number(existingWallet.total_earned) + creatorShare;
+        const newAvailableBalance = Number(existingWallet.available_balance) + creatorShare;
+
+        const { error: updateErr } = await client
+          .from('creator_wallets')
+          .update({
+            total_earned: newTotalEarned,
+            available_balance: newAvailableBalance,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('creator_id', creatorProfileId);
+
+        if (updateErr) {
+          console.warn(`Failed to update creator wallet balance for profile ${creatorProfileId}:`, updateErr.message);
+        }
+      } else {
+        const { error: insertErr } = await client
+          .from('creator_wallets')
+          .insert({
+            creator_id: creatorProfileId,
+            total_earned: creatorShare,
+            available_balance: creatorShare,
+            withdrawn_amount: 0.00,
+          });
+
+        if (insertErr) {
+          console.warn(`Failed to initialize creator wallet balance for profile ${creatorProfileId}:`, insertErr.message);
+        }
+      }
+
+      // Sync total_earnings in creator_profiles as well
+      try {
+        if (profile) {
+          const { data: existingProfile } = await client
+            .from('creator_profiles')
+            .select('total_earnings')
+            .eq('id', creatorProfileId)
+            .maybeSingle();
+
+          if (existingProfile) {
+            const newProfileEarnings = Number(existingProfile.total_earnings) + creatorShare;
+            await client
+              .from('creator_profiles')
+              .update({
+                total_earnings: newProfileEarnings,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', creatorProfileId);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to sync creator_profiles total_earnings:', (e as Error).message);
+      }
+    } else {
+      // In-memory fallback
+      record = {
+        id: `ERN${Date.now().toString().slice(-6)}`,
+        callId,
+        creatorId,
+        grossAmount,
+        creatorShare,
+        platformShare,
+        createdAt: new Date().toISOString(),
+      };
+      this.memEarnings.unshift(record);
+
+      let wallet = this.memWallets.find(w => w.creatorId === creatorId);
+      if (!wallet) {
+        wallet = {
+          creatorId,
+          totalEarned: 0,
+          availableBalance: 0,
+          withdrawnAmount: 0,
+          updatedAt: new Date().toISOString(),
+        };
+        this.memWallets.push(wallet);
+      }
+
+      wallet.totalEarned += creatorShare;
+      wallet.availableBalance += creatorShare;
+      wallet.updatedAt = new Date().toISOString();
+
+      // Update creator revenue in memory creators list
+      const creator = this.creators.find(c => c.id === creatorId);
+      if (creator) {
+        creator.revenueGenerated += creatorShare;
+        creator.completedCalls += 1;
+      }
+    }
+
+    return record;
+  }
+
+  async getEarningsHistory(creatorId: string) {
+    if (this.supabase.isConfigured) {
+      try {
+        const { data, error } = await this.supabase
+          .getClient()
+          .from('creator_earnings')
+          .select('*')
+          .eq('creator_id', creatorId)
+          .order('created_at', { ascending: false });
+
+        if (!error && data) {
+          return data.map(row => ({
+            id: row.id,
+            callId: row.call_id,
+            creatorId: row.creator_id,
+            grossAmount: Number(row.gross_amount),
+            creatorShare: Number(row.creator_share),
+            platformShare: Number(row.platform_share),
+            createdAt: row.created_at,
+          }));
+        }
+        console.warn('CreatorsService.getEarningsHistory Supabase error:', error?.message);
+      } catch (e) {
+        console.warn('CreatorsService.getEarningsHistory exception:', (e as Error).message);
+      }
+    }
+
+    return this.memEarnings
+      .filter(e => e.creatorId === creatorId)
+      .map(row => ({
+        id: row.id,
+        callId: row.callId,
+        creatorId: row.creatorId,
+        grossAmount: Number(row.grossAmount),
+        creatorShare: Number(row.creatorShare),
+        platformShare: Number(row.platformShare),
+        createdAt: row.createdAt,
+      }));
+  }
+
+  async getWalletBalance(creatorId: string) {
+    if (this.supabase.isConfigured) {
+      try {
+        let creatorProfileId = creatorId;
+        const { data: profile } = await this.supabase.getClient()
+          .from('creator_profiles')
+          .select('id')
+          .eq('user_id', creatorId)
+          .maybeSingle();
+
+        if (profile) {
+          creatorProfileId = profile.id;
+        }
+
+        const { data, error } = await this.supabase
+          .getClient()
+          .from('creator_wallets')
+          .select('*')
+          .eq('creator_id', creatorProfileId)
+          .maybeSingle();
+
+        if (!error && data) {
+          return {
+            creatorId,
+            totalEarned: Number(data.total_earned),
+            availableBalance: Number(data.available_balance),
+            withdrawnAmount: Number(data.withdrawn_amount),
+            updatedAt: data.updated_at,
+          };
+        }
+      } catch (e) {
+        console.warn('CreatorsService.getWalletBalance exception:', (e as Error).message);
+      }
+    }
+
+    let wallet = this.memWallets.find(w => w.creatorId === creatorId);
+    if (!wallet) {
+      wallet = {
+        creatorId,
+        totalEarned: 0,
+        availableBalance: 0,
+        withdrawnAmount: 0,
+        updatedAt: new Date().toISOString(),
+      };
+      this.memWallets.push(wallet);
+    }
+    return wallet;
+  }
+
+  updateWalletBalanceInMemory(creatorId: string, availableDelta: number, withdrawnDelta: number) {
+    let wallet = this.memWallets.find(w => w.creatorId === creatorId);
+    if (!wallet) {
+      wallet = {
+        creatorId,
+        totalEarned: 0,
+        availableBalance: 0,
+        withdrawnAmount: 0,
+        updatedAt: new Date().toISOString(),
+      };
+      this.memWallets.push(wallet);
+    }
+    wallet.availableBalance += availableDelta;
+    wallet.withdrawnAmount += withdrawnDelta;
+    wallet.updatedAt = new Date().toISOString();
+  }
+
+  getMemCreators(): Creator[] {
+    return this.creators;
+  }
+
+  getMemEarnings(): any[] {
+    return this.memEarnings;
+  }
 }
+

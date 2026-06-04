@@ -367,4 +367,8 @@ export class UsersService {
     if (dto.onboardingCompleted !== undefined) mem.onboardingCompleted = dto.onboardingCompleted;
     return { message: 'Profile updated', user: mem };
   }
+
+  getMemUsers(): User[] {
+    return this.memUsers;
+  }
 }

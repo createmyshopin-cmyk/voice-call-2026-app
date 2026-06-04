@@ -20,6 +20,7 @@ import NotificationsView from '../components/NotificationsView';
 import SafetyView from '../components/SafetyView';
 import SettingsView from '../components/SettingsView';
 import AdminsView from '../components/AdminsView';
+import FinanceDashboard from '../components/FinanceDashboard';
 
 import { MockDatabase, User, Listener } from '../lib/mockDb';
 
@@ -189,6 +190,7 @@ export default function Home() {
   // Nav Items
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'finance', label: 'Finance Dashboard', icon: BarChart3 },
     { id: 'users', label: 'Users Directory', icon: Users },
     { 
       id: 'listeners', 
@@ -327,6 +329,7 @@ export default function Home() {
         {/* 3. MAIN CONTENTS VIEWPORT */}
         <main className="flex-1 overflow-y-auto p-6 bg-background glow-indigo transition-colors duration-200">
           {activeTab === 'dashboard' && <DashboardView onNavigate={handleGlobalNavigate} />}
+          {activeTab === 'finance' && <FinanceDashboard />}
           {activeTab === 'users' && (
             <UsersView 
               onRefreshStats={refreshBadges} 

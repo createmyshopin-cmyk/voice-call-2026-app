@@ -6,6 +6,7 @@ import '../providers/auth_provider.dart';
 import '../providers/creator_heartbeat_provider.dart';
 import '../providers/call_history_provider.dart';
 import '../services/call_service.dart';
+import '../services/payout_service.dart';
 import 'call_details_screen.dart';
 import 'calling_screen.dart';
 import '../widgets/call_history_card.dart';
@@ -24,7 +25,57 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
   final Set<String> _shownRequestIds = {};
   bool _incomingDialogOpen = false;
   final CallService _callService = CallService();
-  double _withdrawableBalance = 28.50;
+  double _withdrawableBalance = 0.00;
+
+  // Payout Integration
+  final PayoutService _payoutService = PayoutService();
+  CreatorWalletBalance? _walletBalance;
+  List<CreatorWithdrawal> _withdrawals = [];
+  bool _loadingPayouts = false;
+  String? _payoutError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPayoutData();
+  }
+
+  Future<void> _loadPayoutData() async {
+    if (!mounted) return;
+    setState(() {
+      _loadingPayouts = true;
+      _payoutError = null;
+    });
+
+    final token = context.read<AuthProvider>().accessToken;
+    if (token == null) {
+      setState(() {
+        _loadingPayouts = false;
+        _payoutError = 'Not authenticated';
+      });
+      return;
+    }
+
+    try {
+      final balance = await _payoutService.fetchBalance(accessToken: token);
+      final list = await _payoutService.fetchWithdrawals(accessToken: token);
+      if (mounted) {
+        setState(() {
+          _walletBalance = balance;
+          _withdrawals = list;
+          _withdrawableBalance = balance.availableBalance;
+          _loadingPayouts = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loadingPayouts = false;
+          _payoutError = 'Failed to load payout data: $e';
+        });
+      }
+    }
+  }
 
   @override
   void deactivate() {
@@ -299,7 +350,12 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
   Widget _buildTabButton(String label, int index, IconData icon) {
     bool isActive = _activeTab == index;
     return ScalePressedButton(
-      onTap: () => setState(() => _activeTab = index),
+      onTap: () {
+        setState(() => _activeTab = index);
+        if (index == 1) {
+          _loadPayoutData();
+        }
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
@@ -543,136 +599,325 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
 
   // --- TAB 2: PAYOUT WITHDRAW TAB ---
   Widget _buildPayoutTab() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      physics: const BouncingScrollPhysics(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Withdrawable balance card
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E2637),
-              borderRadius: BorderRadius.circular(20),
+    if (_loadingPayouts && _walletBalance == null) {
+      return const Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFBA9EFF)),
+        ),
+      );
+    }
+
+    final balanceVal = _walletBalance?.availableBalance ?? 0.0;
+    final earnedVal = _walletBalance?.totalEarned ?? 0.0;
+    final withdrawnVal = _walletBalance?.totalWithdrawn ?? 0.0;
+
+    return RefreshIndicator(
+      color: const Color(0xFFBA9EFF),
+      onRefresh: _loadPayoutData,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Available Balance card
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E2637),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'AVAILABLE BALANCE',
+                    style: GoogleFonts.poppins(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFFA6ABBb),
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '₹${balanceVal.toStringAsFixed(2)}',
+                    style: GoogleFonts.poppins(
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Lifetime Earned',
+                            style: GoogleFonts.poppins(fontSize: 10, color: const Color(0xFF707584)),
+                          ),
+                          Text(
+                            '₹${earnedVal.toStringAsFixed(2)}',
+                            style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.bold, color: const Color(0xFF2ECC71)),
+                          ),
+                        ],
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Total Withdrawn',
+                            style: GoogleFonts.poppins(fontSize: 10, color: const Color(0xFF707584)),
+                          ),
+                          Text(
+                            '₹${withdrawnVal.toStringAsFixed(2)}',
+                            style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.bold, color: const Color(0xFFBA9EFF)),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'WITHDRAWABLE CASH',
-                  style: GoogleFonts.poppins(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    color: const Color(0xFFA6ABBb),
-                    letterSpacing: 1.2,
+            const SizedBox(height: 24),
+
+            // Payout CTA Button
+            ScalePressedButton(
+              onTap: balanceVal >= 100.0
+                  ? _openPayoutDrawerSheet
+                  : () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Minimum withdrawal is ₹100.00')),
+                      );
+                    },
+              child: Container(
+                height: 60,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(30),
+                  gradient: balanceVal >= 100.0
+                      ? const LinearGradient(colors: [Color(0xFF2ECC71), Color(0xFF00A86B)])
+                      : null,
+                  color: balanceVal < 100.0 ? const Color(0xFF1E2637) : null,
+                  boxShadow: balanceVal >= 100.0
+                      ? [
+                          BoxShadow(
+                            color: const Color(0xFF00A86B).withOpacity(0.2),
+                            blurRadius: 15,
+                            offset: const Offset(0, 8),
+                          ),
+                        ]
+                      : null,
+                ),
+                child: Center(
+                  child: Text(
+                    'Request Withdrawal',
+                    style: GoogleFonts.poppins(
+                      color: balanceVal >= 100.0 ? Colors.white : const Color(0xFF707584),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
                   ),
                 ),
-                const SizedBox(height: 8),
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Withdrawal History Header
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
                 Text(
-                  '\$${_withdrawableBalance.toStringAsFixed(2)}',
+                  'Withdrawal History',
                   style: GoogleFonts.poppins(
-                    fontSize: 32,
+                    fontSize: 16,
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
                   ),
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  'Minimum cash-out value is \$10.00.',
-                  style: GoogleFonts.poppins(
-                    color: const Color(0xFF707584),
-                    fontSize: 12,
+                if (_payoutError != null)
+                  IconButton(
+                    icon: const Icon(Icons.refresh, color: Colors.red, size: 18),
+                    onPressed: _loadPayoutData,
                   ),
-                ),
               ],
             ),
-          ),
-          const SizedBox(height: 32),
+            const SizedBox(height: 12),
 
-          // Payout CTA Button
-          ScalePressedButton(
-            onTap: _withdrawableBalance >= 10.0
-                ? _openPayoutDrawerSheet
-                : () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Minimum withdrawal is \$10.00')),
-                    );
-                  },
-            child: Container(
-              height: 60,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(30),
-                gradient: _withdrawableBalance >= 10.0
-                    ? const LinearGradient(colors: [Color(0xFF2ECC71), Color(0xFF00A86B)])
-                    : null,
-                color: _withdrawableBalance < 10.0 ? const Color(0xFF1E2637) : null,
-                boxShadow: _withdrawableBalance >= 10.0
-                    ? [
-                        BoxShadow(
-                          color: const Color(0xFF00A86B).withOpacity(0.2),
-                          blurRadius: 15,
-                          offset: const Offset(0, 8),
-                        ),
-                      ]
-                    : null,
-              ),
-              child: Center(
-                child: Text(
-                  'Request Payout Now',
-                  style: GoogleFonts.poppins(
-                    color: _withdrawableBalance >= 10.0 ? Colors.white : const Color(0xFF707584),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
+            if (_withdrawals.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 30),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF131A28),
+                  borderRadius: BorderRadius.circular(16),
                 ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-
-          // Payout history note
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: const Color(0xFF131A28),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.info_outline, color: Color(0xFFBA9EFF), size: 24),
-                const SizedBox(width: 16),
-                Expanded(
+                child: Center(
                   child: Text(
-                    'Payouts are processed automatically every Tuesday. Funds take 2-3 business days to reach your account.',
+                    'No withdrawal requests found.',
                     style: GoogleFonts.poppins(
-                      color: const Color(0xFFA6ABBb),
+                      color: const Color(0xFF707584),
                       fontSize: 13,
                     ),
                   ),
                 ),
-              ],
-            ),
-          ),
-        ],
+              )
+            else
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _withdrawals.length,
+                itemBuilder: (context, index) {
+                  final item = _withdrawals[index];
+                  final isBank = item.bankAccountNumber != null;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF131A28),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFF1E2637)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              '₹${item.amount.toStringAsFixed(2)}',
+                              style: GoogleFonts.poppins(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                            _buildStatusBadge(item.status),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          isBank
+                              ? 'Bank A/C: ${item.bankAccountNumber} (${item.bankIfsc})'
+                              : 'UPI: ${item.upiId}',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: const Color(0xFFA6ABBb),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Requested on: ${_formatDate(item.requestedAt)}',
+                          style: GoogleFonts.poppins(
+                            fontSize: 10,
+                            color: const Color(0xFF707584),
+                          ),
+                        ),
+                        if (item.adminNotes != null) ...[
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            width: double.infinity,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1E2637),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'Note: ${item.adminNotes}',
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                color: Colors.amber,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  );
+                },
+              ),
+          ],
+        ),
       ),
     );
   }
 
+  Widget _buildStatusBadge(String status) {
+    Color bg;
+    Color fg;
+    switch (status) {
+      case 'pending':
+        bg = Colors.amber.withOpacity(0.1);
+        fg = Colors.amber;
+        break;
+      case 'approved':
+        bg = Colors.blue.withOpacity(0.1);
+        fg = Colors.blue;
+        break;
+      case 'paid':
+        bg = Colors.green.withOpacity(0.1);
+        fg = Colors.green;
+        break;
+      case 'rejected':
+      default:
+        bg = Colors.red.withOpacity(0.1);
+        fg = Colors.red;
+        break;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        status.toUpperCase(),
+        style: GoogleFonts.poppins(
+          fontSize: 9,
+          fontWeight: FontWeight.bold,
+          color: fg,
+        ),
+      ),
+    );
+  }
+
+  String _formatDate(String isoString) {
+    try {
+      final dt = DateTime.parse(isoString).toLocal();
+      return '${dt.day}/${dt.month}/${dt.year} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return isoString;
+    }
+  }
+
   // Opens Payout bottom sheet
   void _openPayoutDrawerSheet() {
+    final token = context.read<AuthProvider>().accessToken;
+    if (token == null) return;
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _PayoutWithdrawSheet(
-        amount: _withdrawableBalance,
-        onSuccess: () {
-          setState(() {
-            _withdrawableBalance = 0.00;
-          });
+        maxAmount: _walletBalance?.availableBalance ?? 0.0,
+        onSubmit: (amount, method, {bankName, bankNo, bankIfsc, upiId}) async {
+          await _payoutService.requestWithdrawal(
+            accessToken: token,
+            amount: amount,
+            paymentMethod: method,
+            bankAccountName: bankName,
+            bankAccountNumber: bankNo,
+            bankIfsc: bankIfsc,
+            upiId: upiId,
+          );
+          _loadPayoutData();
         },
       ),
     );
@@ -999,18 +1244,37 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
 
 // --- PAYOUT WITHDRAW SHEET DRAWER ---
 class _PayoutWithdrawSheet extends StatefulWidget {
-  final double amount;
-  final VoidCallback onSuccess;
-  const _PayoutWithdrawSheet({required this.amount, required this.onSuccess});
+  final double maxAmount;
+  final Future<void> Function(
+    double amount,
+    String method, {
+    String? bankName,
+    String? bankNo,
+    String? bankIfsc,
+    String? upiId,
+  }) onSubmit;
+
+  const _PayoutWithdrawSheet({
+    required this.maxAmount,
+    required this.onSubmit,
+  });
 
   @override
   State<_PayoutWithdrawSheet> createState() => _PayoutWithdrawSheetState();
 }
 
 class _PayoutWithdrawSheetState extends State<_PayoutWithdrawSheet> with SingleTickerProviderStateMixin {
-  int _selectedMethod = 0; // 0: Bank, 1: UPI, 2: PayPal
+  int _selectedMethod = 1; // 0: Bank, 1: UPI (Default to UPI)
   bool _isProcessing = false;
   bool _isSuccess = false;
+  String? _errorMessage;
+
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _amountController;
+  final TextEditingController _upiController = TextEditingController();
+  final TextEditingController _bankNameController = TextEditingController();
+  final TextEditingController _bankNoController = TextEditingController();
+  final TextEditingController _bankIfscController = TextEditingController();
 
   late AnimationController _animController;
   late Animation<double> _scaleAnimation;
@@ -1018,6 +1282,9 @@ class _PayoutWithdrawSheetState extends State<_PayoutWithdrawSheet> with SingleT
   @override
   void initState() {
     super.initState();
+    _amountController = TextEditingController(
+      text: widget.maxAmount > 0 ? widget.maxAmount.toStringAsFixed(2) : '0.00',
+    );
     _animController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
@@ -1027,17 +1294,44 @@ class _PayoutWithdrawSheetState extends State<_PayoutWithdrawSheet> with SingleT
 
   @override
   void dispose() {
+    _amountController.dispose();
+    _upiController.dispose();
+    _bankNameController.dispose();
+    _bankNoController.dispose();
+    _bankIfscController.dispose();
     _animController.dispose();
     super.dispose();
   }
 
-  void _withdrawFunds() {
+  Future<void> _withdrawFunds() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    final amt = double.tryParse(_amountController.text) ?? 0.0;
+    if (amt < 100.0) {
+      setState(() => _errorMessage = 'Minimum withdrawal is ₹100.00');
+      return;
+    }
+    if (amt > widget.maxAmount) {
+      setState(() => _errorMessage = 'Amount exceeds available balance');
+      return;
+    }
+
     setState(() {
       _isProcessing = true;
+      _errorMessage = null;
     });
 
-    // Simulate verification delay
-    Future.delayed(const Duration(milliseconds: 1800), () {
+    try {
+      final method = _selectedMethod == 0 ? 'bank' : 'upi';
+      await widget.onSubmit(
+        amt,
+        method,
+        upiId: _selectedMethod == 1 ? _upiController.text.trim() : null,
+        bankName: _selectedMethod == 0 ? _bankNameController.text.trim() : null,
+        bankNo: _selectedMethod == 0 ? _bankNoController.text.trim() : null,
+        bankIfsc: _selectedMethod == 0 ? _bankIfscController.text.trim() : null,
+      );
+
       if (mounted) {
         setState(() {
           _isProcessing = false;
@@ -1047,12 +1341,18 @@ class _PayoutWithdrawSheetState extends State<_PayoutWithdrawSheet> with SingleT
 
         Future.delayed(const Duration(milliseconds: 1500), () {
           if (mounted) {
-            widget.onSuccess();
             Navigator.pop(context);
           }
         });
       }
-    });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _errorMessage = e.toString().replaceAll('DioException:', '').trim();
+        });
+      }
+    }
   }
 
   @override
@@ -1071,204 +1371,319 @@ class _PayoutWithdrawSheetState extends State<_PayoutWithdrawSheet> with SingleT
         top: 16,
         bottom: MediaQuery.of(context).viewInsets.bottom + 24,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Handle
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: const Color(0xFF424855),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          if (!_isProcessing && !_isSuccess) ...[
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Withdraw Funds',
-                  style: GoogleFonts.poppins(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 20,
-                    color: Colors.white,
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Color(0xFF707584)),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-            const Divider(color: Color(0xFF424855)),
-            const SizedBox(height: 12),
-
-            // Cash info
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle
             Container(
-              padding: const EdgeInsets.all(16),
+              width: 40,
+              height: 4,
               decoration: BoxDecoration(
-                color: const Color(0xFF2ECC71).withOpacity(0.05),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFF2ECC71).withOpacity(0.2)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Withdrawing Amount',
-                    style: GoogleFonts.poppins(color: const Color(0xFFA6ABBb), fontSize: 14),
-                  ),
-                  Text(
-                    '\$${widget.amount.toStringAsFixed(2)}',
-                    style: GoogleFonts.poppins(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 22,
-                      color: const Color(0xFF2ECC71),
-                    ),
-                  ),
-                ],
+                color: const Color(0xFF424855),
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
             const SizedBox(height: 20),
 
-            // Payment selections
-            _buildPayoutOption(0, Icons.account_balance, 'Bank Account Transfer', 'Takes 2-3 business days'),
-            const SizedBox(height: 8),
-            _buildPayoutOption(1, Icons.phone_iphone, 'Instant UPI Cashout', 'Paytm, PhonePe, GPay'),
-            const SizedBox(height: 8),
-            _buildPayoutOption(2, Icons.payment, 'PayPal Wallet', 'Charges 2.5% transaction fee'),
-            const SizedBox(height: 24),
+            if (!_isProcessing && !_isSuccess) ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Withdraw Funds',
+                    style: GoogleFonts.poppins(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 20,
+                      color: Colors.white,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Color(0xFF707584)),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+              const Divider(color: Color(0xFF1E2637)),
+              const SizedBox(height: 12),
 
-            // Submit Button
-            ScalePressedButton(
-              onTap: _withdrawFunds,
-              child: Container(
-                width: double.infinity,
-                height: 60,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(30),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFFBA9EFF), Color(0xFFFF1493)],
+              if (_errorMessage != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    _errorMessage!,
+                    style: GoogleFonts.poppins(color: Colors.redAccent, fontSize: 12),
                   ),
                 ),
-                child: Center(
-                  child: Text(
-                    'Confirm Payout Request',
-                    style: GoogleFonts.poppins(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+
+              // Amount Input
+              TextFormField(
+                controller: _amountController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                style: GoogleFonts.poppins(color: Colors.white, fontSize: 16),
+                decoration: InputDecoration(
+                  labelText: 'Withdrawal Amount (₹)',
+                  labelStyle: GoogleFonts.poppins(color: const Color(0xFF707584)),
+                  prefixIcon: const Icon(Icons.currency_rupee, color: Color(0xFFBA9EFF), size: 18),
+                  enabledBorder: OutlineInputBorder(
+                    borderSide: const BorderSide(color: Color(0xFF424855)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderSide: const BorderSide(color: Color(0xFFBA9EFF)),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                validator: (val) {
+                  if (val == null || val.isEmpty) return 'Please enter an amount';
+                  final numVal = double.tryParse(val);
+                  if (numVal == null) return 'Please enter a valid number';
+                  if (numVal < 100.0) return 'Minimum withdrawal is ₹100.00';
+                  if (numVal > widget.maxAmount) return 'Exceeds available balance';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+
+              // Payment selections
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildMethodSelector(1, Icons.phone_iphone, 'UPI Payout'),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildMethodSelector(0, Icons.account_balance, 'Bank Account'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              if (_selectedMethod == 1) ...[
+                // UPI Fields
+                TextFormField(
+                  controller: _upiController,
+                  style: GoogleFonts.poppins(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'UPI ID',
+                    labelStyle: GoogleFonts.poppins(color: const Color(0xFF707584), fontSize: 12),
+                    hintText: 'example@upi',
+                    hintStyle: GoogleFonts.poppins(color: const Color(0xFF424855), fontSize: 12),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: const BorderSide(color: Color(0xFF424855)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: const BorderSide(color: Color(0xFFBA9EFF)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  validator: (val) {
+                    if (_selectedMethod == 1 && (val == null || val.trim().isEmpty)) {
+                      return 'Please enter your UPI ID';
+                    }
+                    return null;
+                  },
+                ),
+              ] else ...[
+                // Bank Account Fields
+                TextFormField(
+                  controller: _bankNameController,
+                  style: GoogleFonts.poppins(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'Account Holder Name',
+                    labelStyle: GoogleFonts.poppins(color: const Color(0xFF707584), fontSize: 12),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: const BorderSide(color: Color(0xFF424855)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: const BorderSide(color: Color(0xFFBA9EFF)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  validator: (val) {
+                    if (_selectedMethod == 0 && (val == null || val.trim().isEmpty)) {
+                      return 'Account name is required';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _bankNoController,
+                  keyboardType: TextInputType.number,
+                  style: GoogleFonts.poppins(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'Bank Account Number',
+                    labelStyle: GoogleFonts.poppins(color: const Color(0xFF707584), fontSize: 12),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: const BorderSide(color: Color(0xFF424855)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: const BorderSide(color: Color(0xFFBA9EFF)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  validator: (val) {
+                    if (_selectedMethod == 0 && (val == null || val.trim().isEmpty)) {
+                      return 'Account number is required';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _bankIfscController,
+                  textCapitalization: TextCapitalization.characters,
+                  style: GoogleFonts.poppins(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'IFSC Code',
+                    labelStyle: GoogleFonts.poppins(color: const Color(0xFF707584), fontSize: 12),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: const BorderSide(color: Color(0xFF424855)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: const BorderSide(color: Color(0xFFBA9EFF)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  validator: (val) {
+                    if (_selectedMethod == 0 && (val == null || val.trim().isEmpty)) {
+                      return 'IFSC code is required';
+                    }
+                    return null;
+                  },
+                ),
+              ],
+              const SizedBox(height: 24),
+
+              // Submit Button
+              ScalePressedButton(
+                onTap: _withdrawFunds,
+                child: Container(
+                  width: double.infinity,
+                  height: 60,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(30),
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFFBA9EFF), Color(0xFFFF1493)],
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      'Confirm Payout Request',
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ] else if (_isProcessing) ...[
-            const SizedBox(height: 40),
-            const SizedBox(
-              width: 50,
-              height: 50,
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFBA9EFF)),
-                strokeWidth: 4,
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'Verifying details...',
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.bold,
-                fontSize: 18,
-                color: Colors.white,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Securing connection with Bank nodes',
-              style: GoogleFonts.poppins(
-                fontSize: 13,
-                color: const Color(0xFF707584),
-              ),
-            ),
-            const SizedBox(height: 40),
-          ] else if (_isSuccess) ...[
-            const SizedBox(height: 40),
-            ScaleTransition(
-              scale: _scaleAnimation,
-              child: Container(
-                width: 80,
-                height: 80,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF2ECC71),
-                  shape: BoxShape.circle,
+            ] else if (_isProcessing) ...[
+              const SizedBox(height: 40),
+              const SizedBox(
+                width: 50,
+                height: 50,
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFBA9EFF)),
+                  strokeWidth: 4,
                 ),
-                child: const Icon(Icons.check, color: Colors.white, size: 48),
               ),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'Disbursement Requested!',
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.bold,
-                fontSize: 20,
-                color: Colors.white,
+              const SizedBox(height: 24),
+              Text(
+                'Processing request...',
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                  color: Colors.white,
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Funds will reach your account within 24 hours.',
-              textAlign: TextAlign.center,
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: const Color(0xFFA6ABBb),
+              const SizedBox(height: 8),
+              Text(
+                'Submitting details securely to admin nodes',
+                style: GoogleFonts.poppins(
+                  fontSize: 13,
+                  color: const Color(0xFF707584),
+                ),
               ),
-            ),
-            const SizedBox(height: 40),
+              const SizedBox(height: 40),
+            ] else if (_isSuccess) ...[
+              const SizedBox(height: 40),
+              ScaleTransition(
+                scale: _scaleAnimation,
+                child: Container(
+                  width: 80,
+                  height: 80,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF2ECC71),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.check, color: Colors.white, size: 48),
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'Disbursement Requested!',
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Your request has been submitted successfully.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  color: const Color(0xFFA6ABBb),
+                ),
+              ),
+              const SizedBox(height: 40),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildPayoutOption(int index, IconData icon, String label, String sub) {
+  Widget _buildMethodSelector(int index, IconData icon, String label) {
     bool isSel = _selectedMethod == index;
     return GestureDetector(
       onTap: () => setState(() => _selectedMethod = index),
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         decoration: BoxDecoration(
           color: isSel ? const Color(0xFFBA9EFF).withOpacity(0.04) : Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSel ? const Color(0xFFBA9EFF) : const Color(0xFF424855),
             width: isSel ? 1.5 : 1.0,
           ),
         ),
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: isSel ? const Color(0xFFBA9EFF) : const Color(0xFF707584), size: 24),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                  ),
-                  Text(
-                    sub,
-                    style: GoogleFonts.poppins(color: const Color(0xFF707584), fontSize: 12),
-                  ),
-                ],
+            Icon(icon, color: isSel ? const Color(0xFFBA9EFF) : const Color(0xFF707584), size: 16),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
               ),
-            ),
-            Icon(
-              isSel ? Icons.radio_button_checked : Icons.radio_button_off,
-              color: isSel ? const Color(0xFFBA9EFF) : const Color(0xFF707584),
             ),
           ],
         ),

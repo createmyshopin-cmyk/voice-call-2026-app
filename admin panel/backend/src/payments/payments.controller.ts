@@ -1,7 +1,7 @@
-import { Controller, Get, Post, Body, Param, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, HttpCode, HttpStatus, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
-import { CreatePackageDto, VerifyPaymentDto } from './dto/payment.dto';
+import { CreatePackageDto, VerifyPaymentDto, CreateOrderDto } from './dto/payment.dto';
 import { JwtAuthGuard } from '../auth/auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
 
@@ -39,6 +39,15 @@ export class PaymentsController {
     return this.paymentsService.getPayments();
   }
 
+  @Post('create-order')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Create Razorpay order for coin purchase' })
+  @ApiResponse({ status: 201, description: 'Order created successfully.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized.' })
+  createOrder(@Request() req: { user: { id: string } }, @Body() createOrderDto: CreateOrderDto) {
+    return this.paymentsService.createOrder(req.user.id, createOrderDto.packageId);
+  }
+
   @Post('verify')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify pending recharge payment' })
@@ -61,3 +70,4 @@ export class PaymentsController {
     return this.paymentsService.refundPayment(paymentId, reason);
   }
 }
+

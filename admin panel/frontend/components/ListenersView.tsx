@@ -99,15 +99,50 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
 
   // 5. Withdrawal status updater
   const handleWithdrawal = (reqId: string, action: 'approve' | 'pay' | 'reject') => {
+    let reason = '';
+    let refNum = '';
+    let notes = '';
+
+    if (action === 'reject') {
+      const promptReason = window.prompt('Enter rejection reason:');
+      if (promptReason === null) return;
+      reason = promptReason || 'Rejected by admin';
+    } else if (action === 'pay') {
+      const promptRef = window.prompt('Enter payment reference/transaction number:');
+      if (promptRef === null) return;
+      refNum = promptRef || `TXN${Date.now().toString().slice(-6)}`;
+      notes = window.prompt('Enter admin notes (optional):') || 'Processed by admin';
+    }
+
     const updatedReqs = withdraws.map(w => {
       if (w.id === reqId) {
         let nextStatus: WithdrawRequest['status'] = 'pending';
-        if (action === 'approve') nextStatus = 'approved';
-        if (action === 'pay') nextStatus = 'paid';
-        if (action === 'reject') nextStatus = 'rejected';
+        let updatedW = { ...w };
+
+        if (action === 'approve') {
+          nextStatus = 'approved';
+          updatedW.status = nextStatus;
+        } else if (action === 'pay') {
+          nextStatus = 'paid';
+          updatedW.status = nextStatus;
+          updatedW.adminNote = notes;
+          // Sync wallet balance in mock db as well
+          const allListeners = MockDatabase.getListeners();
+          const targetListener = allListeners.find(l => l.name === w.listenerName);
+          if (targetListener) {
+            targetListener.revenueGenerated = Math.max(0, targetListener.revenueGenerated - w.amount);
+            targetListener.earningsLifetime = Math.max(0, targetListener.earningsLifetime - w.amount);
+            MockDatabase.saveListeners(allListeners);
+            setListeners(allListeners);
+          }
+        } else if (action === 'reject') {
+          nextStatus = 'rejected';
+          updatedW.status = nextStatus;
+          updatedW.adminNote = reason;
+        }
         
         triggerToast(`Payout request ${reqId} marked as ${nextStatus}`, action === 'reject' ? 'error' : 'success');
-        return { ...w, status: nextStatus };
+        return updatedW;
       }
       return w;
     });
@@ -383,8 +418,81 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
 
       {/* 4. Withdrawal Requests */}
       {activeSubTab === 'withdrawals' && (
-        <div className="glass-panel rounded-2xl overflow-hidden">
-          <div className="overflow-x-auto">
+        <div className="space-y-6">
+          {/* Withdrawal KPI Cards Grid */}
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+            {/* Card 1: Pending */}
+            <div className="glass-card p-4 rounded-xl border border-zinc-900">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-zinc-400">Pending Requests</span>
+                <span className="p-1 bg-amber-500/10 rounded text-amber-400 text-[9px] font-bold">
+                  ⌛ Pending
+                </span>
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-2xl font-bold text-white tracking-tight">
+                  {withdraws.filter(w => w.status === 'pending').length}
+                </span>
+                <span className="text-[10px] text-zinc-500">
+                  (₹{withdraws.filter(w => w.status === 'pending').reduce((sum, w) => sum + w.amount, 0)})
+                </span>
+              </div>
+            </div>
+
+            {/* Card 2: Approved */}
+            <div className="glass-card p-4 rounded-xl border border-zinc-900">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-zinc-400">Approved Requests</span>
+                <span className="p-1 bg-blue-500/10 rounded text-blue-400 text-[9px] font-bold">
+                  ✓ Approved
+                </span>
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-2xl font-bold text-white tracking-tight">
+                  {withdraws.filter(w => w.status === 'approved').length}
+                </span>
+                <span className="text-[10px] text-zinc-500">
+                  (₹{withdraws.filter(w => w.status === 'approved').reduce((sum, w) => sum + w.amount, 0)})
+                </span>
+              </div>
+            </div>
+
+            {/* Card 3: Paid */}
+            <div className="glass-card p-4 rounded-xl border border-zinc-900">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-zinc-400">Paid Requests</span>
+                <span className="p-1 bg-emerald-500/10 rounded text-emerald-400 text-[9px] font-bold">
+                  $ Paid
+                </span>
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-2xl font-bold text-white tracking-tight">
+                  {withdraws.filter(w => w.status === 'paid').length}
+                </span>
+                <span className="text-[10px] text-zinc-500">
+                  (₹{withdraws.filter(w => w.status === 'paid').reduce((sum, w) => sum + w.amount, 0)})
+                </span>
+              </div>
+            </div>
+
+            {/* Card 4: Total Payouts */}
+            <div className="glass-card p-4 rounded-xl border border-zinc-900">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-zinc-400">Total Paid Payouts</span>
+                <span className="p-1 bg-pink-500/10 rounded text-pink-400 text-[9px] font-bold">
+                  Total
+                </span>
+              </div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span className="text-2xl font-bold text-emerald-400 tracking-tight">
+                  ₹{withdraws.filter(w => w.status === 'paid').reduce((sum, w) => sum + w.amount, 0)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="glass-panel rounded-2xl overflow-hidden border border-zinc-900">
+            <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-zinc-800 text-zinc-400 bg-zinc-900/30">
@@ -458,6 +566,7 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
             </table>
           </div>
         </div>
+      </div>
       )}
 
       {/* 5. Performance Analytics */}

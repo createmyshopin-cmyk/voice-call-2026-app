@@ -891,9 +891,16 @@ export class CallsService {
             balanceAfter: updatedCaller.coins,
             durationSeconds,
           });
+
+          try {
+            await this.creatorsService.recordEarnings(callId, row.creator_id as string, coinsSpent);
+          } catch (earnErr) {
+            console.error('Creator earnings logging failed:', (earnErr as Error).message);
+          }
         } catch (e) {
           console.error('Coin deduction failed:', (e as Error).message);
         }
+
 
         const session: CallSession = {
           id: callId,
@@ -966,9 +973,16 @@ export class CallsService {
         balanceAfter: updatedCaller.coins,
         durationSeconds: dto.duration,
       });
+
+      try {
+        await this.creatorsService.recordEarnings(callId, mem.creatorId, coinsSpent);
+      } catch (earnErr) {
+        console.error('In-memory creator earnings logging failed:', (earnErr as Error).message);
+      }
     } catch (e) {
       console.error('In-memory coin deduction failed:', (e as Error).message);
     }
+
 
     return {
       message: 'Call ended. Coins deducted successfully.',
@@ -1069,5 +1083,9 @@ export class CallsService {
     const mem = this.memCalls.find((c) => c.id === callId);
     if (!mem) throw new NotFoundException(`Call session ${callId} not found`);
     return mem;
+  }
+
+  getMemCalls(): CallSession[] {
+    return this.memCalls;
   }
 }

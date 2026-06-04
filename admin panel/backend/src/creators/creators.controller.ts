@@ -66,6 +66,22 @@ export class CreatorsController {
     return this.creatorsService.recordHeartbeat(req.user.id);
   }
 
+  @Get('earnings-history')
+  @ApiOperation({ summary: 'Get current creator earnings history' })
+  @ApiResponse({ status: 200, description: 'Earnings history list.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized.' })
+  getEarningsHistory(@Request() req: { user: { id: string } }) {
+    return this.creatorsService.getEarningsHistory(req.user.id);
+  }
+
+  @Get('wallet/balance')
+  @ApiOperation({ summary: 'Get current creator wallet balance' })
+  @ApiResponse({ status: 200, description: 'Wallet balance record.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized.' })
+  getWalletBalance(@Request() req: { user: { id: string } }) {
+    return this.creatorsService.getWalletBalance(req.user.id);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get host creator details by ID' })
   @ApiResponse({ status: 200, description: 'Creator details returned successfully.' })

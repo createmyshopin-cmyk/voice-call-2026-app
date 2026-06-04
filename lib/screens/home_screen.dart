@@ -13,6 +13,7 @@ import 'calling_screen.dart';
 import '../widgets/call_history_card.dart';
 import 'recharge_screen.dart';
 import 'listener_dashboard_screen.dart';
+import 'agora_debug_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -561,6 +562,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   onTap: () {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Support ticket system is coming soon!')),
+                    );
+                  },
+                ),
+                _buildDivider(),
+                _buildProfileMenuItem(
+                  icon: Icons.bug_report_outlined,
+                  title: 'Agora Debug',
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const AgoraDebugScreen()),
                     );
                   },
                 ),

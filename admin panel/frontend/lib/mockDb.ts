@@ -57,6 +57,7 @@ export interface WithdrawRequest {
   };
   requestDate: string;
   status: 'pending' | 'approved' | 'paid' | 'rejected';
+  adminNote?: string;
 }
 
 export interface Transaction {
