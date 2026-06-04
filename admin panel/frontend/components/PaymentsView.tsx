@@ -51,6 +51,8 @@ export default function PaymentsView() {
 
   useEffect(() => {
     loadData();
+    const interval = setInterval(loadData, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   // 1. Verify Pending Payment

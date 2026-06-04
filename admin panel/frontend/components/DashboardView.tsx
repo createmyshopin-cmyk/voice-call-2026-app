@@ -222,6 +222,8 @@ export default function DashboardView({ onNavigate }: DashboardViewProps) {
 
   useEffect(() => {
     loadLiveDashboard();
+    const interval = setInterval(loadLiveDashboard, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   // Stats Calculations

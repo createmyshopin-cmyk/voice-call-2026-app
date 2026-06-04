@@ -39,6 +39,8 @@ export default function WalletView() {
 
   useEffect(() => {
     loadData();
+    const interval = setInterval(loadData, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleExportCSV = () => {

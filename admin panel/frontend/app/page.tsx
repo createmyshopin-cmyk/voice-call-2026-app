@@ -392,13 +392,7 @@ export default function Home() {
         <main className="flex-1 overflow-y-auto p-6 bg-background glow-indigo transition-colors duration-200">
           {activeTab === 'dashboard' && <DashboardView onNavigate={handleGlobalNavigate} />}
           {activeTab === 'finance' && <FinanceDashboard />}
-          {activeTab === 'users' && (
-            <UsersView 
-              onRefreshStats={refreshBadges} 
-              selectedUserId={selectedUserId} 
-              onClearSelectedUser={() => setSelectedUserId(undefined)}
-            />
-          )}
+          {activeTab === 'users' && <UsersView embedded selectedUserId={selectedUserId} onClearSelectedUser={() => setSelectedUserId(undefined)} />}
           {activeTab === 'listeners' && <ListenersView onRefreshStats={refreshBadges} subTab={subTab} />}
           {activeTab === 'wallet' && <WalletView />}
           {activeTab === 'coins' && <CoinsView />}
