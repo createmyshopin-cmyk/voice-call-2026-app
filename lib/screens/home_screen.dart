@@ -1,4 +1,3 @@
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +7,7 @@ import '../providers/wallet_provider.dart';
 import '../providers/call_history_provider.dart';
 import '../models/call_history_item.dart';
 import '../services/call_service.dart';
+import '../utils/api_error_message.dart';
 import 'call_details_screen.dart';
 import 'calling_screen.dart';
 import '../widgets/call_history_card.dart';
@@ -33,14 +33,17 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Trigger a fresh fetch if the list is empty (e.g. first load)
-      final cp = context.read<CreatorProvider>();
-      if (cp.creators.isEmpty && !cp.isLoading) {
-        cp.fetchCreators();
-      }
-      final hp = context.read<CallHistoryProvider>();
-      if (hp.items.isEmpty && !hp.isLoading) {
-        hp.fetchHistory();
+      final auth = context.read<AuthProvider>();
+      if (auth.accessToken != null) {
+        context.read<WalletProvider>().loadWallet();
+        final cp = context.read<CreatorProvider>();
+        if (cp.creators.isEmpty && !cp.isLoading) {
+          cp.fetchCreators();
+        }
+        final hp = context.read<CallHistoryProvider>();
+        if (hp.items.isEmpty && !hp.isLoading) {
+          hp.fetchHistory();
+        }
       }
     });
   }
@@ -1304,17 +1307,11 @@ class _HomeScreenState extends State<HomeScreen> {
       // Dismiss loading indicator
       if (mounted) Navigator.pop(context);
       
-      String errorMsg = 'Failed to connect call.';
-      if (e is DioException && e.response?.data != null) {
-        final data = e.response!.data;
-        if (data is Map && data.containsKey('message')) {
-          errorMsg = data['message'].toString();
-        }
-      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(errorMsg),
+            content: Text(callRequestErrorMessage(e)),
+            duration: const Duration(seconds: 5),
             backgroundColor: Colors.red,
           ),
         );

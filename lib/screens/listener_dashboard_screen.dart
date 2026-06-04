@@ -6,7 +6,11 @@ import '../providers/auth_provider.dart';
 import '../providers/creator_heartbeat_provider.dart';
 import '../providers/call_history_provider.dart';
 import '../services/call_service.dart';
+import '../services/incoming_call_coordinator.dart';
+import '../services/incoming_call_ringtone.dart';
+import '../utils/api_error_message.dart';
 import '../services/payout_service.dart';
+import '../services/creator_stats_service.dart';
 import 'call_details_screen.dart';
 import 'calling_screen.dart';
 import '../widgets/call_history_card.dart';
@@ -22,7 +26,6 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
   int _activeTab = 0; // 0: Earnings, 1: Payout, 2: History, 3: Reports
   bool _isOnline = false;
   Timer? _pendingPollTimer;
-  final Set<String> _shownRequestIds = {};
   bool _incomingDialogOpen = false;
   final CallService _callService = CallService();
   double _withdrawableBalance = 0.00;
@@ -34,10 +37,53 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
   bool _loadingPayouts = false;
   String? _payoutError;
 
+  List<int> _weeklyEarnings = List.filled(7, 0);
+  double _totalEarningsCoins = 0;
+  int _totalTalkMinutes = 0;
+  String _pickedRateLabel = '—';
+
   @override
   void initState() {
     super.initState();
     _loadPayoutData();
+    _loadEarningsStats();
+  }
+
+  Future<void> _loadEarningsStats() async {
+    final token = context.read<AuthProvider>().accessToken;
+    final userId = context.read<AuthProvider>().user?.uid;
+    if (token == null || userId == null) return;
+
+    try {
+      final historyProvider = context.read<CallHistoryProvider>();
+      if (historyProvider.items.isEmpty && !historyProvider.isLoading) {
+        await historyProvider.fetchHistory();
+      }
+      final statsService = CreatorStatsService(accessToken: token);
+      final earnings = await statsService.fetchEarningsHistory();
+      final history = historyProvider.items;
+
+      final creatorCalls = history.where((c) => c.creatorId == userId).toList();
+      final completed = creatorCalls.where((c) =>
+          c.status == 'completed' || c.status == 'ended').length;
+      final totalCalls = creatorCalls.length;
+      final talkSeconds =
+          creatorCalls.fold<int>(0, (sum, c) => sum + c.durationSeconds);
+
+      if (mounted) {
+        setState(() {
+          _weeklyEarnings = CreatorStatsService.weeklyCoinsFromEarnings(earnings);
+          _totalEarningsCoins = _walletBalance?.totalEarned ??
+              CreatorStatsService.totalCoins(earnings);
+          _totalTalkMinutes = talkSeconds ~/ 60;
+          _pickedRateLabel = totalCalls > 0
+              ? '${((completed / totalCalls) * 100).toStringAsFixed(1)}%'
+              : '—';
+        });
+      }
+    } catch (e) {
+      debugPrint('Earnings stats load error: $e');
+    }
   }
 
   Future<void> _loadPayoutData() async {
@@ -64,8 +110,10 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
           _walletBalance = balance;
           _withdrawals = list;
           _withdrawableBalance = balance.availableBalance;
+          _totalEarningsCoins = balance.totalEarned;
           _loadingPayouts = false;
         });
+        await _loadEarningsStats();
       }
     } catch (e) {
       if (mounted) {
@@ -108,7 +156,6 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
         (_) => _pollPendingRequests(),
       );
     } else {
-      _shownRequestIds.clear();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('You are offline. Calls will not be received.'),
@@ -128,8 +175,8 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
     try {
       final pending = await _callService.getPendingRequests(accessToken: token);
       for (final request in pending) {
-        if (_shownRequestIds.contains(request.id)) continue;
-        _shownRequestIds.add(request.id);
+        if (!IncomingCallCoordinator.shouldPresent(request.id)) continue;
+        IncomingCallCoordinator.markPresenting(request.id);
         if (mounted) {
           await _showIncomingCall(request);
         }
@@ -144,6 +191,8 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
     if (!mounted) return;
     _incomingDialogOpen = true;
 
+    await IncomingCallRingtone.start();
+    try {
     await showGeneralDialog(
       context: context,
       barrierDismissible: false,
@@ -156,6 +205,8 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
           avatar: request.callerAvatar,
           isVideo: request.isVideo,
           onDecline: () async {
+            await IncomingCallRingtone.stop();
+            IncomingCallCoordinator.markHandled(request.id);
             final token = context.read<AuthProvider>().accessToken;
             if (token != null) {
               try {
@@ -179,6 +230,8 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
                 accessToken: token,
                 callRequestId: request.id,
               );
+              IncomingCallCoordinator.markHandled(request.id);
+              await IncomingCallRingtone.stop();
               if (dialogContext.mounted) Navigator.pop(dialogContext);
               if (!mounted) return;
               await Navigator.push(
@@ -197,12 +250,14 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
                 ),
               );
             } catch (e) {
+              IncomingCallCoordinator.clearPresenting();
               if (dialogContext.mounted) Navigator.pop(dialogContext);
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Could not accept the call. Please try again.'),
+                  SnackBar(
+                    content: Text(callAcceptErrorMessage(e)),
                     backgroundColor: Colors.red,
+                    duration: const Duration(seconds: 5),
                   ),
                 );
               }
@@ -211,7 +266,11 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
         );
       },
     );
+    } finally {
+      await IncomingCallRingtone.stop();
+    }
 
+    IncomingCallCoordinator.clearPresenting();
     _incomingDialogOpen = false;
   }
 
@@ -459,7 +518,7 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
                     ),
                     const SizedBox(width: 10),
                     Text(
-                      '2,850 Coins',
+                      '${_totalEarningsCoins.round()} Coins',
                       style: GoogleFonts.poppins(
                         fontSize: 28,
                         fontWeight: FontWeight.bold,
@@ -470,7 +529,7 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Equivalent to \$28.50 USD',
+                  '₹${(_totalEarningsCoins / 10).toStringAsFixed(2)} est. payout value',
                   style: GoogleFonts.poppins(
                     color: const Color(0xFF2ECC71),
                     fontSize: 14,
@@ -504,13 +563,12 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    _buildWeeklyBar('M', 40, 60),
-                    _buildWeeklyBar('T', 80, 120),
-                    _buildWeeklyBar('W', 60, 90),
-                    _buildWeeklyBar('T', 100, 150),
-                    _buildWeeklyBar('F', 90, 135),
-                    _buildWeeklyBar('S', 120, 180),
-                    _buildWeeklyBar('S', 50, 75),
+                    for (var i = 0; i < 7; i++)
+                      _buildWeeklyBar(
+                        ['M', 'T', 'W', 'T', 'F', 'S', 'S'][i],
+                        _weeklyEarnings[i],
+                        _weeklyBarHeight(_weeklyEarnings[i]),
+                      ),
                   ],
                 ),
               ],
@@ -522,17 +580,24 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
           Row(
             children: [
               Expanded(
-                child: _buildStatCell('Talk Time', '420m', Icons.timer),
+                child: _buildStatCell('Talk Time', '${_totalTalkMinutes}m', Icons.timer),
               ),
               const SizedBox(width: 16),
               Expanded(
-                child: _buildStatCell('Picked Rate', '98.5%', Icons.check_circle_outline),
+                child: _buildStatCell('Picked Rate', _pickedRateLabel, Icons.check_circle_outline),
               ),
             ],
           ),
         ],
       ),
     );
+  }
+
+  double _weeklyBarHeight(int coins) {
+    if (coins <= 0) return 12;
+    final max = _weeklyEarnings.reduce((a, b) => a > b ? a : b);
+    if (max <= 0) return 12;
+    return (coins / max * 150).clamp(12, 150);
   }
 
   Widget _buildWeeklyBar(String day, int coins, double height) {
@@ -1349,7 +1414,10 @@ class _PayoutWithdrawSheetState extends State<_PayoutWithdrawSheet> with SingleT
       if (mounted) {
         setState(() {
           _isProcessing = false;
-          _errorMessage = e.toString().replaceAll('DioException:', '').trim();
+          _errorMessage = apiErrorMessage(
+            e,
+            fallback: 'Withdrawal request failed. Please try again.',
+          );
         });
       }
     }

@@ -9,7 +9,7 @@ import 'providers/creator_heartbeat_provider.dart';
 import 'providers/call_history_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
-import 'screens/gender_selection_screen.dart';
+import 'screens/create_profile_screen.dart';
 import 'firebase_options.dart';
 import 'services/fcm_service.dart';
 
@@ -29,8 +29,12 @@ void main() async {
         // 2. Wallet reacts to auth changes
         ChangeNotifierProxyProvider<AuthProvider, WalletProvider>(
           create: (_) => WalletProvider(),
-          update: (_, auth, wallet) =>
-              wallet!..updateAuth(auth.user?.uid, auth.accessToken),
+          update: (_, auth, wallet) => wallet!
+            ..updateAuth(
+              auth.user?.uid,
+              auth.accessToken,
+              initialCoins: auth.user?.coins,
+            ),
         ),
 
         // 3. Creators list reacts to auth changes (re-fetch on login)
@@ -82,7 +86,7 @@ class MyApp extends StatelessWidget {
             return const HomeScreen();
           }
           if (auth.needsOnboarding) {
-            return const GenderSelectionScreen();
+            return const CreateProfileScreen();
           }
           return const LoginScreen();
         },

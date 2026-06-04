@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
 import '../utils/phone_utils.dart';
-import 'gender_selection_screen.dart';
+import 'create_profile_screen.dart';
 import 'otp_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -52,7 +52,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (auth.hasFirebaseSession) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => const GenderSelectionScreen()),
+          MaterialPageRoute(builder: (_) => const CreateProfileScreen()),
         );
         return;
       }

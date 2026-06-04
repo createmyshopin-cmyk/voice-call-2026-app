@@ -13,18 +13,40 @@ class UsersService {
               receiveTimeout: const Duration(seconds: 10),
             ));
 
+  Future<Map<String, dynamic>> completeOnboarding({
+    required String accessToken,
+    required String fullName,
+    required String dateOfBirth,
+    required String gender,
+    required String avatarUrl,
+  }) async {
+    final response = await _dio.post(
+      '/api/users/complete-onboarding',
+      data: {
+        'fullName': fullName,
+        'dateOfBirth': dateOfBirth,
+        'gender': gender,
+        'avatarUrl': avatarUrl,
+      },
+      options: Options(
+        headers: {'Authorization': 'Bearer $accessToken'},
+      ),
+    );
+    return response.data as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> updateProfile({
     required String accessToken,
-    String? gender,
+    String? fullName,
+    String? avatarUrl,
     String? language,
-    bool? onboardingCompleted,
   }) async {
     final response = await _dio.patch(
       '/api/users/profile',
       data: {
-        if (gender != null) 'gender': gender,
+        if (fullName != null) 'fullName': fullName,
+        if (avatarUrl != null) 'avatarUrl': avatarUrl,
         if (language != null) 'language': language,
-        if (onboardingCompleted != null) 'onboardingCompleted': onboardingCompleted,
       },
       options: Options(
         headers: {'Authorization': 'Bearer $accessToken'},

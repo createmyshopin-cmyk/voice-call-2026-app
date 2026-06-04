@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import '../screens/incoming_call_screen.dart';
 import 'api_config.dart';
+import 'incoming_call_coordinator.dart';
 
 /// Top-level background handler — must be a top-level function, not a method.
 @pragma('vm:entry-point')
@@ -19,36 +23,36 @@ class FCMService {
 
   static final FirebaseMessaging _messaging = FirebaseMessaging.instance;
 
+  static bool _handlersRegistered = false;
+  static StreamSubscription<RemoteMessage>? _onMessageSub;
+  static StreamSubscription<RemoteMessage>? _onOpenedSub;
+
   /// Call once after the user logs in and accessToken is available.
   static Future<void> initialize(String accessToken) async {
-    // 1. Request permission (Android 13+, iOS)
     await _messaging.requestPermission(
       alert: true,
       badge: true,
       sound: true,
     );
 
-    // 2. Register current token with backend
     final token = await _messaging.getToken();
     if (token != null) {
       await _registerToken(token, accessToken);
     }
 
-    // 3. Re-register whenever token rotates
     _messaging.onTokenRefresh.listen((newToken) {
       _registerToken(newToken, accessToken);
     });
 
-    // 4. Foreground messages — show IncomingCallScreen directly
-    FirebaseMessaging.onMessage.listen(_handleMessage);
+    if (!_handlersRegistered) {
+      _onMessageSub = FirebaseMessaging.onMessage.listen(_handleMessage);
+      _onOpenedSub =
+          FirebaseMessaging.onMessageOpenedApp.listen(_handleMessage);
+      _handlersRegistered = true;
+    }
 
-    // 5. Background notification tapped — app comes to foreground
-    FirebaseMessaging.onMessageOpenedApp.listen(_handleMessage);
-
-    // 6. App was terminated, user tapped the notification
     final initial = await _messaging.getInitialMessage();
     if (initial != null) {
-      // Delay slightly so the navigator is ready
       Future.delayed(const Duration(milliseconds: 500), () {
         _handleMessage(initial);
       });
@@ -75,20 +79,34 @@ class FCMService {
   static void _handleMessage(RemoteMessage message) {
     if (message.data['type'] != 'incoming_call') return;
 
-    final nav = navigatorKey.currentState;
-    if (nav == null) return;
-
     final data = message.data;
-    nav.push(MaterialPageRoute(
-      builder: (_) => IncomingCallScreen(
-        callerName: data['callerName'] ?? 'Unknown',
-        callerAvatar: data['callerAvatar'] ?? '',
-        channelName: data['channelName'] ?? '',
-        callRequestId: data['callRequestId'] ?? data['callSessionId'] ?? '',
-        agoraToken: data['agoraToken'] ?? '',
-        agoraAppId: data['agoraAppId'] ?? '',
-        isVideo: data['callType'] == 'video',
-      ),
-    ));
+    final callRequestId =
+        data['callRequestId']?.toString() ?? data['callSessionId']?.toString() ?? '';
+
+    if (!IncomingCallCoordinator.shouldPresent(callRequestId)) {
+      debugPrint('FCM incoming_call ignored (duplicate/handled): $callRequestId');
+      return;
+    }
+
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      final nav = navigatorKey.currentState;
+      if (nav == null) return;
+
+      IncomingCallCoordinator.markPresenting(callRequestId);
+
+      nav.push(
+        MaterialPageRoute(
+          builder: (_) => IncomingCallScreen(
+            callerName: data['callerName'] ?? 'Unknown',
+            callerAvatar: data['callerAvatar'] ?? '',
+            channelName: data['channelName'] ?? '',
+            callRequestId: callRequestId,
+            agoraToken: data['agoraToken'] ?? '',
+            agoraAppId: data['agoraAppId'] ?? '',
+            isVideo: data['callType'] == 'video',
+          ),
+        ),
+      );
+    });
   }
 }

@@ -1,20 +1,14 @@
 import 'package:dio/dio.dart';
-
 import '../models/creator.dart';
-import 'api_config.dart';
+import 'api_client.dart';
 
 class CreatorsService {
   final Dio _dio;
 
-  CreatorsService({Dio? dio})
-      : _dio = dio ??
-            Dio(BaseOptions(
-              baseUrl: apiBaseUrl,
-              connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 10),
-            ));
+  CreatorsService({required String accessToken, Dio? dio})
+      : _dio = dio ?? createApiDio(accessToken: accessToken);
 
-  /// Fetches active creators from GET /api/creators (backed by Supabase when configured).
+  /// GET /api/creators — requires user JWT (Firebase login).
   Future<List<Creator>> fetchActiveCreators() async {
     final response = await _dio.get('/api/creators');
     final data = response.data;

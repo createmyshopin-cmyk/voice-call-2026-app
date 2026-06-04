@@ -12,6 +12,7 @@ import '../providers/wallet_provider.dart';
 import '../services/agora_service.dart';
 import '../services/agora_token_service.dart';
 import '../services/call_service.dart';
+import '../services/incoming_call_coordinator.dart';
 
 class CallingScreen extends StatefulWidget {
   final String channelName;
@@ -409,6 +410,11 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
   void _endCall({String? endedReason}) async {
     _timer?.cancel();
     _ringingCountdownTimer?.cancel();
+
+    final requestId = widget.callRequestId;
+    if (requestId != null && requestId.isNotEmpty) {
+      IncomingCallCoordinator.markHandled(requestId);
+    }
 
     final sessionId = _activeCallSessionId;
     final auth = context.read<AuthProvider>();

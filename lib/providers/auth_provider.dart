@@ -17,7 +17,10 @@ class AppUser {
   final int coins;
   final String status;
   final String? firebaseUid;
+  final String? fullName;
+  final String? dateOfBirth;
   final String? gender;
+  final String? avatarUrl;
   final String? language;
   final bool onboardingCompleted;
 
@@ -29,21 +32,31 @@ class AppUser {
     required this.coins,
     required this.status,
     this.firebaseUid,
+    this.fullName,
+    this.dateOfBirth,
     this.gender,
+    this.avatarUrl,
     this.language,
     this.onboardingCompleted = false,
   });
 
   factory AppUser.fromJson(Map<String, dynamic> json) {
+    final fullName = json['fullName'] as String? ??
+        json['full_name'] as String? ??
+        json['name'] as String?;
     return AppUser(
       uid: json['id'] as String,
-      name: json['name'] as String? ?? '',
+      name: fullName ?? json['name'] as String? ?? '',
       phone: json['phone'] as String? ?? '',
       email: json['email'] as String? ?? '',
       coins: json['coins'] as int? ?? 0,
       status: json['status'] as String? ?? 'active',
-      firebaseUid: json['firebase_uid'] as String?,
+      firebaseUid: json['firebase_uid'] as String? ?? json['firebaseUid'] as String?,
+      fullName: fullName,
+      dateOfBirth:
+          json['dateOfBirth'] as String? ?? json['date_of_birth'] as String?,
       gender: json['gender'] as String?,
+      avatarUrl: json['avatarUrl'] as String? ?? json['avatar_url'] as String?,
       language: json['language'] as String?,
       onboardingCompleted:
           json['onboardingCompleted'] as bool? ??
@@ -265,20 +278,51 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
+  /// One-time onboarding: full name, DOB, gender, avatar.
+  Future<void> completeOnboarding({
+    required String fullName,
+    required String dateOfBirth,
+    required String gender,
+    required String avatarUrl,
+  }) async {
+    if (_accessToken == null) {
+      throw Exception('Not authenticated');
+    }
+    _setLoading(true);
+    _lastError = null;
+    try {
+      final result = await _usersService.completeOnboarding(
+        accessToken: _accessToken!,
+        fullName: fullName,
+        dateOfBirth: dateOfBirth,
+        gender: gender,
+        avatarUrl: avatarUrl,
+      );
+      await _applyProfileUpdateResult(result);
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  /// Post-onboarding edits: full name and avatar only.
   Future<void> updateProfile({
-    String? gender,
+    String? fullName,
+    String? avatarUrl,
     String? language,
-    bool? onboardingCompleted,
   }) async {
     if (_accessToken == null) {
       throw Exception('Not authenticated');
     }
     final result = await _usersService.updateProfile(
       accessToken: _accessToken!,
-      gender: gender,
+      fullName: fullName,
+      avatarUrl: avatarUrl,
       language: language,
-      onboardingCompleted: onboardingCompleted,
     );
+    await _applyProfileUpdateResult(result);
+  }
+
+  Future<void> _applyProfileUpdateResult(Map<String, dynamic> result) async {
     final userJson = result['user'];
     if (userJson is Map<String, dynamic>) {
       _user = AppUser.fromJson(userJson);
@@ -303,6 +347,10 @@ class AuthProvider with ChangeNotifier {
     if (response.statusCode == 200) {
       _user = AppUser.fromJson(response.data as Map<String, dynamic>);
       notifyListeners();
+    } else if (response.statusCode == 401) {
+      _accessToken = null;
+      await SessionStorage.clearAccessToken();
+      throw Exception('Session expired');
     } else {
       throw Exception('Failed to load profile');
     }

@@ -3,18 +3,8 @@ import 'package:flutter/material.dart';
 import '../models/creator.dart';
 import '../services/creators_service.dart';
 
-/// Manages the list of active creators fetched from GET /api/creators.
-///
-/// Wire up in main.dart as:
-/// ```dart
-/// ChangeNotifierProxyProvider<AuthProvider, CreatorProvider>(
-///   create: (_) => CreatorProvider(),
-///   update: (_, auth, prev) => prev!..onAuthChanged(auth.accessToken),
-/// )
-/// ```
 class CreatorProvider with ChangeNotifier {
-  final CreatorsService _service = CreatorsService();
-
+  String? _accessToken;
   List<Creator> _creators = [];
   bool _isLoading = false;
   String? _error;
@@ -23,34 +13,36 @@ class CreatorProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
 
-  /// Called by ProxyProvider when auth state changes.
   void onAuthChanged(String? accessToken) {
-    if (accessToken != null) {
+    _accessToken = accessToken;
+    if (accessToken != null && accessToken.isNotEmpty) {
       fetchCreators();
     } else {
-      // Signed out — clear the list
       _creators = [];
       _error = null;
       notifyListeners();
     }
   }
 
-  /// Fetches active creators from the backend.
-  /// Safe to call multiple times; deduplicates concurrent calls.
   Future<void> fetchCreators() async {
+    final token = _accessToken;
+    if (token == null || token.isEmpty) {
+      _error = 'Sign in to see live creators.';
+      notifyListeners();
+      return;
+    }
     if (_isLoading) return;
     _isLoading = true;
     _error = null;
     notifyListeners();
 
     try {
-      final list = await _service.fetchActiveCreators();
-      _creators = list;
+      final service = CreatorsService(accessToken: token);
+      _creators = await service.fetchActiveCreators();
       _error = null;
     } catch (e) {
       debugPrint('CreatorProvider.fetchCreators error: $e');
-      _error = 'Failed to load creators. Please try again.';
-      // Keep existing list if any — don't wipe on retry failure
+      _error = 'Failed to load creators. Pull to refresh.';
     } finally {
       _isLoading = false;
       notifyListeners();

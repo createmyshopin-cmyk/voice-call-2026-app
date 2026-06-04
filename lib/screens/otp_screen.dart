@@ -6,7 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
-import 'gender_selection_screen.dart';
+import 'create_profile_screen.dart';
 import 'home_screen.dart';
 
 class OtpScreen extends StatefulWidget {
@@ -82,7 +82,7 @@ class _OtpScreenState extends State<OtpScreen> {
 
       final destination = auth.user?.onboardingCompleted == true
           ? const HomeScreen()
-          : const GenderSelectionScreen();
+          : const CreateProfileScreen();
 
       Navigator.pushReplacement(
         context,

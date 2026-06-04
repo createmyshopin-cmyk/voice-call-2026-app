@@ -18,15 +18,25 @@ class WalletProvider with ChangeNotifier {
   String? get userId => _userId;
   String? get accessToken => _accessToken;
 
-  void updateAuth(String? userId, String? accessToken) {
+  void updateAuth(String? userId, String? accessToken, {int? initialCoins}) {
     _userId = userId;
     _accessToken = accessToken;
     if (_userId != null && _accessToken != null) {
+      if (initialCoins != null) {
+        _balance = initialCoins;
+        notifyListeners();
+      }
       loadWallet();
     } else {
       _balance = 0;
       notifyListeners();
     }
+  }
+
+  /// Sync balance from profile without a network round-trip.
+  void setBalance(int coins) {
+    _balance = coins;
+    notifyListeners();
   }
 
   Future<void> loadWallet() async {

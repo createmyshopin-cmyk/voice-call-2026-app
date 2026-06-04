@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../utils/api_error_message.dart';
 
 class LanguageSelectionScreen extends StatefulWidget {
   final String selectedGender;
@@ -108,9 +109,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
                             await auth.loginWithFirebase();
                           }
                           await auth.updateProfile(
-                            gender: widget.selectedGender,
                             language: _selectedLanguageName,
-                            onboardingCompleted: true,
                           );
                           if (context.mounted) {
                             Navigator.of(context).popUntil((route) => route.isFirst);
@@ -119,7 +118,7 @@ class _LanguageSelectionScreenState extends State<LanguageSelectionScreen> {
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
-                                content: Text('Could not save profile: $e'),
+                                content: Text(profileSaveErrorMessage(e)),
                                 backgroundColor: Colors.red,
                               ),
                             );

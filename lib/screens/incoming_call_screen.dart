@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/call_service.dart';
+import '../services/incoming_call_coordinator.dart';
+import '../services/incoming_call_ringtone.dart';
+import '../utils/api_error_message.dart';
 import 'calling_screen.dart';
 
 class IncomingCallScreen extends StatefulWidget {
@@ -34,10 +39,16 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   late final AnimationController _pulseController;
   late final AnimationController _slideController;
   late final Animation<double> _slideAnimation;
+  Timer? _remoteStatusPollTimer;
+  final CallService _callService = CallService();
 
   @override
   void initState() {
     super.initState();
+    if (widget.callRequestId.isNotEmpty) {
+      IncomingCallCoordinator.markPresenting(widget.callRequestId);
+      _startRemoteStatusPoll();
+    }
 
     _pulseController = AnimationController(
       vsync: this,
@@ -53,10 +64,39 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       parent: _slideController,
       curve: Curves.easeOutBack,
     );
+
+    IncomingCallRingtone.start();
+  }
+
+  void _startRemoteStatusPoll() {
+    _remoteStatusPollTimer?.cancel();
+    _remoteStatusPollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (!mounted || _isAccepting) return;
+      final token = context.read<AuthProvider>().accessToken;
+      if (token == null) return;
+      try {
+        final data = await _callService.getCallRequestStatus(
+          accessToken: token,
+          callRequestId: widget.callRequestId,
+        );
+        final status = data['status'] as String?;
+        if (status == 'cancelled' ||
+            status == 'missed' ||
+            status == 'rejected' ||
+            status == 'accepted') {
+          IncomingCallCoordinator.markHandled(widget.callRequestId);
+          await IncomingCallRingtone.stop();
+          if (mounted) Navigator.pop(context);
+        }
+      } catch (_) {}
+    });
   }
 
   @override
   void dispose() {
+    IncomingCallRingtone.stop();
+    _remoteStatusPollTimer?.cancel();
+    IncomingCallCoordinator.clearPresenting();
     _pulseController.dispose();
     _slideController.dispose();
     super.dispose();
@@ -74,10 +114,14 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       if (token == null) throw Exception('Not authenticated');
 
       // Accept via backend → get real callSession.id and confirmed channelName
-      final result = await CallService().acceptCallRequest(
+      final result = await _callService.acceptCallRequest(
         accessToken: token,
         callRequestId: widget.callRequestId,
       );
+
+      IncomingCallCoordinator.markHandled(widget.callRequestId);
+      _remoteStatusPollTimer?.cancel();
+      await IncomingCallRingtone.stop();
 
       if (!mounted) return;
       Navigator.pushReplacement(
@@ -90,6 +134,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
             displayName: widget.callerName,
             avatarUrl: widget.callerAvatar,
             isVideoCall: widget.isVideo,
+            callRequestId: widget.callRequestId,
             callSessionId: result.callSessionId,
             agoraToken: result.agoraToken.isNotEmpty
                 ? result.agoraToken
@@ -105,18 +150,21 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       setState(() => _isAccepting = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Could not accept call: ${e.toString()}'),
+          content: Text(callAcceptErrorMessage(e)),
           backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
         ),
       );
     }
   }
 
   void _decline() {
-    // Fire-and-forget — don't block the dismiss on a network call
+    IncomingCallCoordinator.markHandled(widget.callRequestId);
+    IncomingCallRingtone.stop();
+    _remoteStatusPollTimer?.cancel();
     final token = context.read<AuthProvider>().accessToken;
     if (token != null) {
-      CallService()
+      _callService
           .rejectCall(accessToken: token, callRequestId: widget.callRequestId)
           .catchError((_) {});
     }
