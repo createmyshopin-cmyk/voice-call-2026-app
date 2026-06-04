@@ -10,6 +10,7 @@ import { WithdrawalsModule } from './withdrawals/withdrawals.module';
 import { AdminModule } from './admin/admin.module';
 import { AgoraModule } from './agora/agora.module';
 import { FinanceModule } from './admin/finance/finance.module';
+import { AdminUsersModule } from './admin/users/admin-users.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { FinanceModule } from './admin/finance/finance.module';
     WithdrawalsModule,
     AdminModule,
     FinanceModule,
+    AdminUsersModule,
   ],
 })
 export class AppModule {}
