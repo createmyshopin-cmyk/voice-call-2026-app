@@ -61,7 +61,11 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
           phone: c.phone || c.user?.phone || 'N/A',
           email: c.email || c.user?.email || 'N/A',
           bio: c.bio || '',
-          languages: c.languages ? c.languages.split(',') : ['English'],
+          languages: Array.isArray(c.languages)
+            ? c.languages
+            : typeof c.languages === 'string' && c.languages
+              ? c.languages.split(',').map((l: string) => l.trim())
+              : ['English'],
           gender: c.gender || c.user?.gender || 'Female',
           experience: c.experience || '1 Year',
           status: c.status,

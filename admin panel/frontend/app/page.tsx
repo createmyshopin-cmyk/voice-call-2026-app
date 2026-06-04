@@ -38,6 +38,10 @@ export default function Home() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   useEffect(() => {
+    const legacyAppToken = localStorage.getItem('token');
+    if (legacyAppToken && !localStorage.getItem('coincall_admin_token')) {
+      localStorage.removeItem('token');
+    }
     if (!isAuthenticated()) {
       router.replace('/login');
       return;

@@ -7,9 +7,16 @@ import { AlertCircle } from 'lucide-react';
 interface LiveDataBannerProps {
   isLive: boolean;
   label?: string;
+  errorMessage?: string;
+  apiBase?: string;
 }
 
-export default function LiveDataBanner({ isLive, label = 'this section' }: LiveDataBannerProps) {
+export default function LiveDataBanner({
+  isLive,
+  label = 'this section',
+  errorMessage,
+  apiBase,
+}: LiveDataBannerProps) {
   if (isLive) return null;
   return (
     <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
@@ -17,10 +24,13 @@ export default function LiveDataBanner({ isLive, label = 'this section' }: LiveD
       <div>
         <p className="font-semibold">Live data unavailable for {label}</p>
         <p className="mt-0.5 text-amber-200/80">
-          Sign in with an admin account or check that{' '}
-          <code className="rounded bg-black/20 px-1">NEXT_PUBLIC_API_URL</code> points to your Railway API.
+          {errorMessage ||
+            'Sign in with an admin account (not the mobile app token). After changing Vercel env vars, redeploy the site.'}
         </p>
-        <Link href="/login" className="mt-1 inline-block font-semibold underline">
+        {apiBase && (
+          <p className="mt-1 text-amber-200/60 font-mono text-[10px] break-all">API: {apiBase}</p>
+        )}
+        <Link href="/login" className="mt-2 inline-block font-semibold underline">
           Go to sign in
         </Link>
       </div>

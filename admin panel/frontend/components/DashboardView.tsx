@@ -7,7 +7,14 @@ import {
   Clock, ArrowUpRight, CheckCircle2, UserCheck, Smartphone, UserMinus
 } from 'lucide-react';
 import { User, Listener, Call, Payment, SafetyReport, WithdrawRequest } from '../lib/mockDb';
-import { API_BASE, getHeaders } from '../lib/api';
+import {
+  API_BASE,
+  getHeaders,
+  classifyApiFailure,
+  connectionErrorMessage,
+  handleAuthFailure,
+} from '../lib/api';
+import { normalizeLanguages } from '../lib/format';
 import LiveDataBanner from './LiveDataBanner';
 
 interface DashboardViewProps {
@@ -23,148 +30,194 @@ export default function DashboardView({ onNavigate }: DashboardViewProps) {
   const [withdrawRequests, setWithdrawRequests] = useState<WithdrawRequest[]>([]);
   const [revenueTab, setRevenueTab] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [isLive, setIsLive] = useState(false);
+  const [loadError, setLoadError] = useState<string | undefined>();
+
+  const mapCreator = (c: Record<string, unknown>, status: string): Listener => ({
+    id: String(c.id),
+    name: String(c.name || (c.user as { name?: string })?.name || 'Unknown Host'),
+    image: String(
+      c.profile_image ||
+        c.profileImage ||
+        (c.user as { profile_image?: string })?.profile_image ||
+        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+    ),
+    phone: String(c.phone || (c.user as { phone?: string })?.phone || 'N/A'),
+    email: String(c.email || (c.user as { email?: string })?.email || 'N/A'),
+    bio: String(c.bio || ''),
+    languages: normalizeLanguages(c.languages),
+    gender: (c.gender as Listener['gender']) || 'Female',
+    experience: String(c.experience || '1 Year'),
+    status: status as Listener['status'],
+    rating: Number(c.rating || 0),
+    completedCalls: Number(c.completedCalls ?? c.total_calls ?? 0),
+    revenueGenerated: Number(c.revenueGenerated ?? c.total_earnings ?? 0),
+    commissionRate: 60,
+    joinDate: String(c.createdAt || c.created_at || new Date().toISOString()).split('T')[0],
+    acceptanceRate: 100,
+    missedCallRate: 0,
+    earningsToday: 0,
+    earningsWeek: 0,
+    earningsMonth: 0,
+    earningsLifetime: Number(c.revenueGenerated ?? c.total_earnings ?? 0),
+  });
 
   const loadLiveDashboard = async () => {
-    try {
-      const usersRes = await fetch(`${API_BASE}/users`, { headers: getHeaders() });
-      const activeCreatorsRes = await fetch(`${API_BASE}/creators/active`, { headers: getHeaders() });
-      const pendingCreatorsRes = await fetch(`${API_BASE}/creators/pending`, { headers: getHeaders() });
-      const suspendedCreatorsRes = await fetch(`${API_BASE}/creators/suspended`, { headers: getHeaders() });
-      const activeCallsRes = await fetch(`${API_BASE}/calls/active`, { headers: getHeaders() });
-      const historyCallsRes = await fetch(`${API_BASE}/calls`, { headers: getHeaders() });
-      const paymentsRes = await fetch(`${API_BASE}/payments/history`, { headers: getHeaders() });
-      const withdrawRes = await fetch(`${API_BASE}/admin/withdrawals`, { headers: getHeaders() });
+    setLoadError(undefined);
+    const headers = getHeaders();
 
-      if (usersRes.ok && activeCreatorsRes.ok && pendingCreatorsRes.ok && suspendedCreatorsRes.ok && activeCallsRes.ok && historyCallsRes.ok && paymentsRes.ok && withdrawRes.ok) {
-        const usersData = await usersRes.json();
-        const activeCreatorsData = await activeCreatorsRes.json();
-        const pendingCreatorsData = await pendingCreatorsRes.json();
-        const suspendedCreatorsData = await suspendedCreatorsRes.json();
-        const activeCallsData = await activeCallsRes.json();
-        const historyCallsData = await historyCallsRes.json();
-        const paymentsData = await paymentsRes.json();
-        const withdrawData = await withdrawRes.json();
-
-        setUsers(usersData.map((u: any) => ({
-          id: u.id,
-          name: u.name || 'Unknown User',
-          image: u.profile_image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
-          phone: u.phone || 'N/A',
-          email: u.email || 'N/A',
-          coins: u.coins || 0,
-          totalCalls: u.total_calls || 0,
-          totalDuration: u.total_duration || 0,
-          totalRecharge: u.total_recharge || 0,
-          totalSpent: u.total_spent || 0,
-          country: u.country || 'India',
-          device: u.device || 'Android Device',
-          registeredAt: u.created_at || new Date().toISOString(),
-          status: u.status || 'active',
-          reportsCount: 0,
-          safetyScore: 100
-        })));
-
-        const combinedCreators = [
-          ...activeCreatorsData.map((c: any) => ({ ...c, status: 'active' })),
-          ...pendingCreatorsData.map((c: any) => ({ ...c, status: 'pending' })),
-          ...suspendedCreatorsData.map((c: any) => ({ ...c, status: 'suspended' }))
-        ].map((c: any) => ({
-          id: c.id,
-          name: c.name || c.user?.name || 'Unknown Host',
-          image: c.profile_image || c.user?.profile_image || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-          phone: c.phone || c.user?.phone || 'N/A',
-          email: c.email || c.user?.email || 'N/A',
-          bio: c.bio || '',
-          languages: c.languages ? c.languages.split(',') : ['English'],
-          gender: c.gender || c.user?.gender || 'Female',
-          experience: c.experience || '1 Year',
-          status: c.status,
-          rating: Number(c.rating || 0),
-          completedCalls: Number(c.total_calls || 0),
-          revenueGenerated: Number(c.total_earnings || 0),
-          commissionRate: 60,
-          joinDate: c.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
-          acceptanceRate: 100,
-          missedCallRate: 0,
-          earningsToday: 0,
-          earningsWeek: 0,
-          earningsMonth: 0,
-          earningsLifetime: Number(c.total_earnings || 0)
-        }));
-        setListeners(combinedCreators);
-
-        const mappedActiveCalls = activeCallsData.map((c: any) => ({
-          id: c.id,
-          callerId: c.callerId,
-          callerName: c.callerName || 'User',
-          listenerId: c.creatorId,
-          listenerName: c.creatorName || 'Host',
-          type: c.type || 'voice',
-          status: 'active' as const,
-          duration: c.durationSeconds || 0,
-          coinsConsumed: c.coinsSpent || 0,
-          date: c.startedAt || new Date().toISOString()
-        }));
-
-        const mappedHistoryCalls = historyCallsData.map((c: any) => ({
-          id: c.id,
-          callerId: c.callerId,
-          callerName: c.callerName || 'User',
-          listenerId: c.creatorId,
-          listenerName: c.creatorName || 'Host',
-          type: c.type || 'voice',
-          status: c.status || 'completed',
-          duration: c.durationSeconds || 0,
-          coinsConsumed: c.coinsSpent || 0,
-          date: c.startedAt || new Date().toISOString()
-        }));
-
-        setCalls([...mappedActiveCalls, ...mappedHistoryCalls]);
-
-        setPayments(paymentsData.map((p: any) => ({
-          id: p.id,
-          userId: p.userId,
-          userName: p.userName || 'User',
-          amount: p.amount,
-          coins: p.coins,
-          gateway: p.gateway,
-          transactionId: p.transactionId,
-          status: p.status,
-          date: p.date
-        })));
-
-        setWithdrawRequests(withdrawData.map((w: any) => ({
-          id: w.id,
-          listenerId: w.creator_id,
-          listenerName: w.creator_name || 'Host',
-          amount: w.amount,
-          upiId: w.upi_id || 'N/A',
-          bankDetails: {
-            bankName: w.bank_name || 'N/A',
-            accountNo: w.account_number || 'N/A',
-            ifsc: w.ifsc_code || 'N/A',
-            holderName: w.account_name || 'N/A'
-          },
-          requestDate: w.created_at || new Date().toISOString(),
-          status: w.status || 'pending',
-          adminNote: w.admin_note
-        })));
-
-        setReports([]);
-        setIsLive(true);
-        return;
-      }
-    } catch (e) {
-      console.warn('DashboardView failed to fetch live API data:', e);
+    if (!headers.Authorization || headers.Authorization === 'Bearer ') {
+      setLoadError('Not signed in. Use /login with your admin email and password.');
+      setIsLive(false);
+      return;
     }
 
-    setUsers([]);
-    setListeners([]);
-    setCalls([]);
-    setPayments([]);
-    setReports([]);
-    setWithdrawRequests([]);
-    setIsLive(false);
+    try {
+      const endpoints = [
+        { key: 'users', url: `${API_BASE}/users` },
+        { key: 'creatorsActive', url: `${API_BASE}/creators/active` },
+        { key: 'creatorsPending', url: `${API_BASE}/creators/pending` },
+        { key: 'creatorsSuspended', url: `${API_BASE}/creators/suspended` },
+        { key: 'callsActive', url: `${API_BASE}/calls/active` },
+        { key: 'callsHistory', url: `${API_BASE}/calls` },
+        { key: 'payments', url: `${API_BASE}/payments/history` },
+        { key: 'withdrawals', url: `${API_BASE}/admin/withdrawals` },
+      ] as const;
+
+      const responses = await Promise.all(
+        endpoints.map(async (ep) => {
+          const res = await fetch(ep.url, { headers });
+          return { ...ep, res };
+        }),
+      );
+
+      const authRejected = responses.find((r) => r.res.status === 401 || r.res.status === 403);
+      if (authRejected) {
+        handleAuthFailure(authRejected.res.status);
+        setLoadError(connectionErrorMessage(classifyApiFailure(authRejected.res.status)));
+        setIsLive(false);
+        return;
+      }
+
+      const usersRes = responses.find((r) => r.key === 'users')!;
+      if (!usersRes.res.ok) {
+        const failed = responses.filter((r) => !r.res.ok).map((r) => `${r.key} (${r.res.status})`);
+        setLoadError(
+          failed.length
+            ? `API errors: ${failed.join(', ')}. Redeploy Vercel after setting NEXT_PUBLIC_API_URL.`
+            : 'Could not load users from API.',
+        );
+        setIsLive(false);
+        return;
+      }
+
+      const usersData = await usersRes.res.json();
+      setUsers(
+        usersData.map((u: Record<string, unknown>) => ({
+          id: String(u.id),
+          name: String(u.name || 'Unknown User'),
+          image: String(
+            u.profile_image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
+          ),
+          phone: String(u.phone || 'N/A'),
+          email: String(u.email || 'N/A'),
+          coins: Number(u.coins ?? 0),
+          totalCalls: Number(u.totalCalls ?? u.total_calls ?? 0),
+          totalDuration: Number(u.total_duration ?? 0),
+          totalRecharge: Number(u.total_recharge ?? 0),
+          totalSpent: Number(u.total_spent ?? 0),
+          country: String(u.country || 'India'),
+          device: String(u.device || 'Android Device'),
+          registeredAt: String(u.registeredAt || u.created_at || new Date().toISOString()),
+          status: (u.status === 'blocked' ? 'blocked' : 'active') as User['status'],
+          reportsCount: 0,
+          safetyScore: 100,
+        })),
+      );
+
+      const parseJson = async (r: (typeof responses)[number]) =>
+        r.res.ok ? r.res.json() : [];
+
+      const [activeCreatorsData, pendingCreatorsData, suspendedCreatorsData, activeCallsData, historyCallsData, paymentsData, withdrawData] =
+        await Promise.all([
+          parseJson(responses.find((r) => r.key === 'creatorsActive')!),
+          parseJson(responses.find((r) => r.key === 'creatorsPending')!),
+          parseJson(responses.find((r) => r.key === 'creatorsSuspended')!),
+          parseJson(responses.find((r) => r.key === 'callsActive')!),
+          parseJson(responses.find((r) => r.key === 'callsHistory')!),
+          parseJson(responses.find((r) => r.key === 'payments')!),
+          parseJson(responses.find((r) => r.key === 'withdrawals')!),
+        ]);
+
+      setListeners([
+        ...activeCreatorsData.map((c: Record<string, unknown>) => mapCreator(c, 'active')),
+        ...pendingCreatorsData.map((c: Record<string, unknown>) => mapCreator(c, 'pending')),
+        ...suspendedCreatorsData.map((c: Record<string, unknown>) => mapCreator(c, 'suspended')),
+      ]);
+
+      const mapCall = (c: Record<string, unknown>, statusOverride?: Call['status']): Call => ({
+        id: String(c.id),
+        callerId: String(c.callerId),
+        callerName: String(c.callerName || 'User'),
+        listenerId: String(c.creatorId),
+        listenerName: String(c.creatorName || 'Host'),
+        type: (c.type as Call['type']) || 'voice',
+        status: statusOverride || (c.status as Call['status']) || 'completed',
+        duration: Number(c.durationSeconds ?? 0),
+        coinsConsumed: Number(c.coinsSpent ?? 0),
+        date: String(c.startedAt || new Date().toISOString()),
+      });
+
+      setCalls([
+        ...activeCallsData.map((c: Record<string, unknown>) => mapCall(c, 'active')),
+        ...historyCallsData.map((c: Record<string, unknown>) => mapCall(c)),
+      ]);
+
+      setPayments(
+        paymentsData.map((p: Record<string, unknown>) => ({
+          id: String(p.id),
+          userId: String(p.userId),
+          userName: String(p.userName || 'User'),
+          amount: Number(p.amount),
+          coins: Number(p.coins),
+          gateway: String(p.gateway),
+          transactionId: String(p.transactionId),
+          status: p.status as Payment['status'],
+          date: String(p.date),
+        })),
+      );
+
+      setWithdrawRequests(
+        withdrawData.map((w: Record<string, unknown>) => ({
+          id: String(w.id),
+          listenerId: String(w.creator_id ?? w.creatorId),
+          listenerName: String(w.creator_name || 'Host'),
+          amount: Number(w.amount),
+          upiId: String(w.upi_id || 'N/A'),
+          bankDetails: {
+            bankName: String(w.bank_name || 'N/A'),
+            accountNo: String(w.account_number || 'N/A'),
+            ifsc: String(w.ifsc_code || 'N/A'),
+            holderName: String(w.account_name || 'N/A'),
+          },
+          requestDate: String(w.created_at || new Date().toISOString()),
+          status: (w.status as WithdrawRequest['status']) || 'pending',
+          adminNote: w.admin_note ? String(w.admin_note) : undefined,
+        })),
+      );
+
+      setReports([]);
+      setIsLive(true);
+    } catch (e) {
+      console.warn('DashboardView failed to fetch live API data:', e);
+      setLoadError('Network error reaching the API. Check CORS and Railway status.');
+      setUsers([]);
+      setListeners([]);
+      setCalls([]);
+      setPayments([]);
+      setReports([]);
+      setWithdrawRequests([]);
+      setIsLive(false);
+    }
   };
 
   useEffect(() => {
@@ -263,7 +316,7 @@ export default function DashboardView({ onNavigate }: DashboardViewProps) {
         </div>
       </div>
 
-      <LiveDataBanner isLive={isLive} label="dashboard" />
+      <LiveDataBanner isLive={isLive} label="dashboard" errorMessage={loadError} apiBase={API_BASE} />
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">

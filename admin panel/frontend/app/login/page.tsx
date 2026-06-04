@@ -1,16 +1,27 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { API_BASE } from '../../lib/api';
-import { setSession } from '../../lib/auth';
+import { clearSession, setSession } from '../../lib/auth';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    clearSession();
+    const reason = searchParams.get('reason');
+    if (reason === 'forbidden') {
+      setError('Previous session was not an admin account. Sign in below.');
+    } else if (reason === 'expired') {
+      setError('Session expired. Sign in again.');
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,7 +39,8 @@ export default function LoginPage() {
         return;
       }
       setSession(data.accessToken, data.user);
-      router.replace('/');
+      const next = searchParams.get('next');
+      router.replace(next && next.startsWith('/') ? next : '/');
     } catch {
       setError('Could not reach the API. Check NEXT_PUBLIC_API_URL and backend status.');
     } finally {
@@ -90,5 +102,13 @@ export default function LoginPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-zinc-950" />}>
+      <LoginForm />
+    </Suspense>
   );
 }

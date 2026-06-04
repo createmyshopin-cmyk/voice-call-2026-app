@@ -8,14 +8,15 @@ export interface AdminUser {
   role: string;
 }
 
+/** Admin console must use only the admin token — not the Flutter app `token`. */
 export function getToken(): string {
   if (typeof window === 'undefined') return '';
-  return localStorage.getItem(TOKEN_KEY) || localStorage.getItem('token') || '';
+  return localStorage.getItem(TOKEN_KEY) || '';
 }
 
 export function setSession(accessToken: string, user: AdminUser) {
   localStorage.setItem(TOKEN_KEY, accessToken);
-  localStorage.setItem('token', accessToken);
+  localStorage.removeItem('token');
   localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
@@ -37,5 +38,5 @@ export function clearSession() {
 }
 
 export function isAuthenticated(): boolean {
-  return Boolean(getToken());
+  return Boolean(getToken() && getAdminUser());
 }
