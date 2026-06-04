@@ -4,6 +4,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, ShieldCheck, CheckCircle2, RotateCcw, AlertTriangle } from 'lucide-react';
 import { MockDatabase, Payment, User, Transaction } from '../lib/mockDb';
+import { API_BASE, getHeaders } from '../lib/api';
 
 export default function PaymentsView() {
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -19,9 +20,33 @@ export default function PaymentsView() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const loadData = () => {
-    setPayments(MockDatabase.getPayments());
-    setUsers(MockDatabase.getUsers());
+  const [isLive, setIsLive] = useState(false);
+
+  const loadData = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/payments/history`, { headers: getHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        setPayments(data.map((p: any) => ({
+          id: p.id,
+          userId: p.userId,
+          userName: p.userName || 'User',
+          amount: Number(p.amount),
+          coins: Number(p.coins),
+          gateway: p.gateway,
+          transactionId: p.transactionId,
+          status: p.status,
+          date: p.date
+        })));
+        setIsLive(true);
+        return;
+      }
+    } catch (e) {
+      console.warn('PaymentsView failed to load payments history from API:', e);
+    }
+    setPayments([]);
+    setUsers([]);
+    setIsLive(false);
   };
 
   useEffect(() => {
@@ -29,12 +54,29 @@ export default function PaymentsView() {
   }, []);
 
   // 1. Verify Pending Payment
-  const verifyPayment = (payment: Payment) => {
+  const verifyPayment = async (payment: Payment) => {
+    try {
+      const res = await fetch(`${API_BASE}/payments/verify`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          paymentId: payment.id,
+          transactionId: `pay_${Date.now().toString().slice(-6)}`
+        })
+      });
+      if (res.ok) {
+        triggerToast(`Payment transaction verified successfully!`, 'success');
+        loadData();
+        return;
+      }
+    } catch (e) {
+      console.warn('Failed to verify payment on API:', e);
+    }
+
     const updated = payments.map(p => {
       if (p.id === payment.id) {
-        triggerToast(`Payment transaction verified successfully!`, 'success');
+        triggerToast(`Payment transaction verified successfully! (Sandbox)`, 'success');
         
-        // Add coins to user wallet
         const allUsers = MockDatabase.getUsers();
         const updatedUsers = allUsers.map(u => {
           if (u.id === payment.userId) {
@@ -48,7 +90,6 @@ export default function PaymentsView() {
         });
         MockDatabase.saveUsers(updatedUsers);
 
-        // Add Transaction record
         const allTxns = MockDatabase.getTransactions();
         const newTxn: Transaction = {
           id: `TXN${Date.now().toString().slice(-4)}`,
@@ -71,14 +112,30 @@ export default function PaymentsView() {
   };
 
   // 2. Refund Coins
-  const refundCoins = (payment: Payment) => {
+  const refundCoins = async (payment: Payment) => {
     if (payment.status !== 'success') {
       triggerToast('Can only refund successful recharges', 'error');
       return;
     }
     if (!window.confirm(`Refund ${payment.coins} coins to ${payment.userName}?`)) return;
 
-    // Deduct coins from user
+    try {
+      const res = await fetch(`${API_BASE}/payments/${payment.id}/refund`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          reason: `Admin refund for package recharge ${payment.id}`
+        })
+      });
+      if (res.ok) {
+        triggerToast(`Refunded ${payment.coins} coins to ${payment.userName}`, 'success');
+        loadData();
+        return;
+      }
+    } catch (e) {
+      console.warn('Failed to refund payment on API:', e);
+    }
+
     const allUsers = MockDatabase.getUsers();
     const targetUser = allUsers.find(u => u.id === payment.userId);
     if (!targetUser) return;
@@ -99,7 +156,6 @@ export default function PaymentsView() {
     });
     MockDatabase.saveUsers(updatedUsers);
 
-    // Save transaction logs
     const allTxns = MockDatabase.getTransactions();
     const newTxn: Transaction = {
       id: `TXN${Date.now().toString().slice(-4)}`,
@@ -112,17 +168,16 @@ export default function PaymentsView() {
     };
     MockDatabase.saveTransactions([newTxn, ...allTxns]);
 
-    // Update payment record to reflect refund (mock status or note)
     const updatedPayments = payments.map(p => {
       if (p.id === payment.id) {
-        return { ...p, status: 'failed' as const }; // Mark failed to simulate refund deduction
+        return { ...p, status: 'failed' as const };
       }
       return p;
     });
     MockDatabase.savePayments(updatedPayments);
     setPayments(updatedPayments);
 
-    triggerToast(`Refunded ${payment.coins} coins to ${payment.userName}`, 'success');
+    triggerToast(`Refunded ${payment.coins} coins to ${payment.userName} (Sandbox)`, 'success');
     loadData();
   };
 

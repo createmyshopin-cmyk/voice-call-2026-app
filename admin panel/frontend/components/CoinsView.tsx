@@ -4,6 +4,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, Eye, EyeOff, Check, X } from 'lucide-react';
 import { MockDatabase, CoinPackage } from '../lib/mockDb';
+import { API_BASE, getHeaders } from '../lib/api';
 
 export default function CoinsView() {
   const [packages, setPackages] = useState<CoinPackage[]>([]);
@@ -24,8 +25,29 @@ export default function CoinsView() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const loadData = () => {
-    setPackages(MockDatabase.getCoinPackages());
+  const [isLive, setIsLive] = useState(false);
+
+  const loadData = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/payments/packages`, { headers: getHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        setPackages(data.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          coins: Number(p.coins),
+          bonusCoins: Number(p.bonusCoins || 0),
+          price: Number(p.price),
+          enabled: p.enabled
+        })));
+        setIsLive(true);
+        return;
+      }
+    } catch (e) {
+      console.warn('CoinsView failed to fetch packages from API:', e);
+    }
+    setPackages([]);
+    setIsLive(false);
   };
 
   useEffect(() => {
@@ -33,10 +55,31 @@ export default function CoinsView() {
   }, []);
 
   // 1. Toggle Status (Enable/Disable)
-  const toggleStatus = (pkg: CoinPackage) => {
+  const toggleStatus = async (pkg: CoinPackage) => {
+    try {
+      const res = await fetch(`${API_BASE}/payments/packages/${pkg.id}`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          name: pkg.name,
+          coins: pkg.coins,
+          bonusCoins: pkg.bonusCoins,
+          price: pkg.price,
+          enabled: !pkg.enabled
+        })
+      });
+      if (res.ok) {
+        triggerToast(`${pkg.name} status updated`, 'success');
+        loadData();
+        return;
+      }
+    } catch (e) {
+      console.warn('Failed to toggle package status on API:', e);
+    }
+
     const updated = packages.map(p => {
       if (p.id === pkg.id) {
-        triggerToast(`${p.name} status updated`, 'success');
+        triggerToast(`${p.name} status updated (Sandbox)`, 'success');
         return { ...p, enabled: !p.enabled };
       }
       return p;
@@ -46,20 +89,57 @@ export default function CoinsView() {
   };
 
   // 2. Delete Package
-  const deletePkg = (pkgId: string, pkgName: string) => {
+  const deletePkg = async (pkgId: string, pkgName: string) => {
     if (!window.confirm(`Delete coin package "${pkgName}"?`)) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/payments/packages/${pkgId}`, {
+        method: 'DELETE',
+        headers: getHeaders()
+      });
+      if (res.ok) {
+        triggerToast(`Package deleted`, 'error');
+        loadData();
+        return;
+      }
+    } catch (e) {
+      console.warn('Failed to delete package on API:', e);
+    }
+
     const updated = packages.filter(p => p.id !== pkgId);
     MockDatabase.saveCoinPackages(updated);
     setPackages(updated);
-    triggerToast(`Package deleted`, 'error');
+    triggerToast(`Package deleted (Sandbox)`, 'error');
   };
 
   // 3. Add Package Submit
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (coins <= 0 || price <= 0) {
       triggerToast('Values must be positive', 'error');
       return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/payments/packages`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          name,
+          coins,
+          bonusCoins,
+          price
+        })
+      });
+      if (res.ok) {
+        triggerToast('Package created successfully', 'success');
+        setIsAdding(false);
+        resetForm();
+        loadData();
+        return;
+      }
+    } catch (err) {
+      console.warn('Failed to create package on API:', err);
     }
 
     const newPkg: CoinPackage = {
@@ -76,13 +156,35 @@ export default function CoinsView() {
     setPackages(updated);
     setIsAdding(false);
     resetForm();
-    triggerToast('Package created successfully', 'success');
+    triggerToast('Package created successfully (Sandbox)', 'success');
   };
 
   // 4. Edit Package Submit
-  const handleEditSubmit = (e: React.FormEvent) => {
+  const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingPkg) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/payments/packages/${editingPkg.id}`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          name,
+          coins,
+          bonusCoins,
+          price
+        })
+      });
+      if (res.ok) {
+        triggerToast('Package updated successfully', 'success');
+        setEditingPkg(null);
+        resetForm();
+        loadData();
+        return;
+      }
+    } catch (err) {
+      console.warn('Failed to edit package on API:', err);
+    }
 
     const updated = packages.map(p => {
       if (p.id === editingPkg.id) {
@@ -100,7 +202,7 @@ export default function CoinsView() {
     setPackages(updated);
     setEditingPkg(null);
     resetForm();
-    triggerToast('Package updated successfully', 'success');
+    triggerToast('Package updated successfully (Sandbox)', 'success');
   };
 
   const startEdit = (pkg: CoinPackage) => {

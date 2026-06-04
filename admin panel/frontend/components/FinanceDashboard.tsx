@@ -6,9 +6,8 @@ import {
   TrendingUp, DollarSign, Coins, Users, UserCheck, 
   Clock, CheckCircle2, Award, Download, Calendar, BarChart3, AlertCircle 
 } from 'lucide-react';
-import { MockDatabase } from '../lib/mockDb';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+import { API_BASE, getHeaders } from '../lib/api';
+import LiveDataBanner from './LiveDataBanner';
 
 interface OverviewMetrics {
   todayRevenue: number;
@@ -103,13 +102,6 @@ export default function FinanceDashboard() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const getHeaders = () => {
-    const token = localStorage.getItem('token') || localStorage.getItem('coincall_admin_token') || '';
-    return {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
-  };
 
   const loadData = async () => {
     setLoading(true);
@@ -147,98 +139,8 @@ export default function FinanceDashboard() {
 
     if (!success) {
       setIsLive(false);
-      loadMockData();
     }
     setLoading(false);
-  };
-
-  const loadMockData = () => {
-    // Generate fallback datasets from MockDatabase
-    const payments = MockDatabase.getPayments();
-    const calls = MockDatabase.getCalls();
-    const users = MockDatabase.getUsers();
-    const withdraws = MockDatabase.getWithdrawRequests();
-    const listeners = MockDatabase.getListeners();
-
-    const totalRevenue = payments.filter(p => p.status === 'success').reduce((sum, p) => sum + p.amount, 0);
-    const todayRevenue = payments
-      .filter(p => p.status === 'success' && (p.date.startsWith('2026-06-03') || p.date.startsWith('2026-06-04')))
-      .reduce((sum, p) => sum + p.amount, 0);
-    const monthlyRevenue = payments
-      .filter(p => p.status === 'success' && p.date.startsWith('2026-06'))
-      .reduce((sum, p) => sum + p.amount, 0);
-    
-    const coinsSold = payments.filter(p => p.status === 'success').reduce((sum, p) => sum + p.coins, 0);
-
-    const pendingWithdrawals = withdraws.filter(w => w.status === 'pending').length;
-    const paidWithdrawals = withdraws.filter(w => w.status === 'paid').length;
-    const creatorPayouts = withdraws.filter(w => w.status === 'paid').reduce((sum, w) => sum + w.amount, 0);
-    const platformProfit = totalRevenue - creatorPayouts;
-
-    setOverview({
-      todayRevenue,
-      monthlyRevenue,
-      totalRevenue,
-      coinsSold,
-      activeUsers: users.filter(u => u.status === 'active').length,
-      activeCreators: listeners.filter(l => l.status === 'active').length,
-      pendingWithdrawals,
-      paidWithdrawals,
-      creatorPayouts,
-      platformProfit
-    });
-
-    // Mock chart trends
-    const mockChart: ChartDataPoint[] = [];
-    for (let i = chartDays - 1; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const ds = d.toISOString().split('T')[0];
-      
-      mockChart.push({
-        date: ds,
-        revenue: Math.floor(Math.random() * 800) + 200,
-        coinsSold: Math.floor(Math.random() * 1000) + 400,
-        creatorEarnings: Math.floor(Math.random() * 500) + 200,
-        callVolume: Math.floor(Math.random() * 15) + 5,
-        withdrawals: i === 2 ? 3000 : 0
-      });
-    }
-    setChartData(mockChart);
-
-    // Mock top creators
-    const top: TopCreator[] = listeners
-      .sort((a, b) => b.earningsLifetime - a.earningsLifetime)
-      .slice(0, 10)
-      .map(l => ({
-        creatorId: l.id,
-        creatorName: l.name,
-        totalEarnings: l.earningsLifetime,
-        totalCalls: l.completedCalls,
-        totalMinutes: Math.round(l.completedCalls * 8.4)
-      }));
-    setTopCreators(top);
-
-    // Mock call analytics
-    const totalDuration = calls.reduce((sum, c) => sum + c.duration, 0);
-    const coinsUsed = calls.reduce((sum, c) => sum + c.coinsConsumed, 0);
-    setCallAnalytics({
-      totalCalls: calls.length,
-      completedCalls: calls.filter(c => c.status === 'completed' || c.status === 'active').length,
-      totalCallMinutes: Math.round(totalDuration / 60),
-      averageCallDuration: calls.length > 0 ? Math.round(totalDuration / calls.length) : 0,
-      coinsUsed,
-      outstandingCoins: coinsSold - coinsUsed
-    });
-
-    // Mock withdrawal analytics
-    const pendingAmount = withdraws.filter(w => w.status === 'pending').reduce((sum, w) => sum + w.amount, 0);
-    setWithdrawalAnalytics({
-      pendingWithdrawals,
-      pendingAmount,
-      paidWithdrawals,
-      totalPayouts: creatorPayouts
-    });
   };
 
   useEffect(() => {
@@ -272,44 +174,9 @@ export default function FinanceDashboard() {
       a.remove();
       triggerToast(`Exported ${type} report successfully`, 'success');
     } catch (e) {
-      console.warn(`API export failed, generating client-side CSV fallback:`, e);
-      generateClientCsvFallback(type);
+      console.warn(`API export failed:`, e);
+      triggerToast('Export failed. Sign in and ensure the finance API is reachable.', 'error');
     }
-  };
-
-  const generateClientCsvFallback = (type: 'revenue' | 'earnings' | 'withdrawals') => {
-    let headers = '';
-    let rows = '';
-
-    if (type === 'revenue') {
-      headers = 'ID,User ID,Amount (₹),Coins Added,Gateway,Order ID,Date\n';
-      const payments = MockDatabase.getPayments().filter(p => p.status === 'success');
-      rows = payments.map(p => 
-        `"${p.id}","${p.userId}",${p.amount},${p.coins},"${p.gateway}","${p.transactionId}","${p.date}"`
-      ).join('\n');
-    } else if (type === 'earnings') {
-      headers = 'ID,Call ID,Creator ID,Gross Amount (Coins),Creator Share (Coins),Platform Share (Coins),Date\n';
-      const earners = MockDatabase.getListeners();
-      rows = earners.map(l => 
-        `"ERN-${l.id}","CAL-MOCK","${l.id}",${l.revenueGenerated * 1.5},${l.revenueGenerated},${l.revenueGenerated * 0.5},"${l.joinDate}"`
-      ).join('\n');
-    } else {
-      headers = 'ID,Creator ID,Amount (₹),Status,Method,Requested At\n';
-      const withdraws = MockDatabase.getWithdrawRequests();
-      rows = withdraws.map(w => 
-        `"${w.id}","${w.listenerId}",${w.amount},"${w.status}","UPI","${w.requestDate}"`
-      ).join('\n');
-    }
-
-    const blob = new Blob([headers + rows], { type: 'text/csv' });
-    const downloadUrl = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = downloadUrl;
-    a.download = `${type}-report-mock-${Date.now()}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    triggerToast(`Exported ${type} mock report successfully`, 'success');
   };
 
   // SVG Chart Helper
@@ -377,7 +244,7 @@ export default function FinanceDashboard() {
               : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
           }`}>
             <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
-            {isLive ? 'Live Sync Active' : 'Fallback Sandbox'}
+            {isLive ? 'Live data' : 'Not connected'}
           </span>
 
           <button 
@@ -388,6 +255,8 @@ export default function FinanceDashboard() {
           </button>
         </div>
       </div>
+
+      <LiveDataBanner isLive={isLive} label="finance dashboard" />
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">

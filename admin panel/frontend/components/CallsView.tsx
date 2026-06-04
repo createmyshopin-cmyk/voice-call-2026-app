@@ -4,6 +4,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, PhoneCall, PhoneOff, Video, VideoOff, Play, ShieldAlert } from 'lucide-react';
 import { MockDatabase, Call } from '../lib/mockDb';
+import { API_BASE, getHeaders } from '../lib/api';
 
 export default function CallsView() {
   const [calls, setCalls] = useState<Call[]>([]);
@@ -15,10 +16,55 @@ export default function CallsView() {
   // Simulated live ticking state for active calls
   const [activeCallList, setActiveCallList] = useState<Call[]>([]);
 
-  const loadData = () => {
-    const all = MockDatabase.getCalls();
+  const [isLive, setIsLive] = useState(false);
+
+  const loadData = async () => {
+    try {
+      const activeRes = await fetch(`${API_BASE}/calls/active`, { headers: getHeaders() });
+      const historyRes = await fetch(`${API_BASE}/calls`, { headers: getHeaders() });
+
+      if (activeRes.ok && historyRes.ok) {
+        const activeData = await activeRes.json();
+        const historyData = await historyRes.json();
+
+        const mappedActiveCalls = activeData.map((c: any) => ({
+          id: c.id,
+          callerId: c.callerId,
+          callerName: c.callerName || 'User',
+          listenerId: c.creatorId,
+          listenerName: c.creatorName || 'Host',
+          type: c.type || 'voice',
+          status: 'active' as const,
+          duration: c.durationSeconds || 0,
+          coinsConsumed: c.coinsSpent || 0,
+          date: c.startedAt || new Date().toISOString()
+        }));
+
+        const mappedHistoryCalls = historyData.map((c: any) => ({
+          id: c.id,
+          callerId: c.callerId,
+          callerName: c.callerName || 'User',
+          listenerId: c.creatorId,
+          listenerName: c.creatorName || 'Host',
+          type: c.type || 'voice',
+          status: c.status || 'completed',
+          duration: c.durationSeconds || 0,
+          coinsConsumed: c.coinsSpent || 0,
+          date: c.startedAt || new Date().toISOString()
+        }));
+
+        setCalls([...mappedActiveCalls, ...mappedHistoryCalls]);
+        setActiveCallList(mappedActiveCalls);
+        setIsLive(true);
+        return;
+      }
+    } catch (e) {
+      console.warn('CallsView failed to fetch calls from API:', e);
+    }
+    const all: Call[] = [];
     setCalls(all);
     setActiveCallList(all.filter(c => c.status === 'active'));
+    setIsLive(false);
   };
 
   useEffect(() => {
@@ -47,14 +93,31 @@ export default function CallsView() {
     return () => clearInterval(timer);
   }, [activeTab]);
 
-  const endLiveCall = (callId: string) => {
+  const endLiveCall = async (callId: string) => {
     if (!window.confirm('Force disconnect this ongoing call?')) return;
     
-    // Move call from active to completed in full database
-    const allCalls = MockDatabase.getCalls();
     const target = activeCallList.find(c => c.id === callId);
     if (!target) return;
 
+    try {
+      const res = await fetch(`${API_BASE}/calls/active/${callId}/end`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          duration: target.duration,
+          endedReason: 'insufficient_coins'
+        })
+      });
+      if (res.ok) {
+        loadData();
+        return;
+      }
+    } catch (e) {
+      console.warn('Failed to force end call session via API:', e);
+    }
+
+    // Fallback if API fails
+    const allCalls = MockDatabase.getCalls();
     const updatedCalls = allCalls.map(c => {
       if (c.id === callId) {
         return { 

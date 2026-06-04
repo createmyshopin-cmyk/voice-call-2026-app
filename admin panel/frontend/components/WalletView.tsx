@@ -4,14 +4,37 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Download, RefreshCw, Wallet, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 import { MockDatabase, Transaction } from '../lib/mockDb';
+import { API_BASE, getHeaders } from '../lib/api';
 
 export default function WalletView() {
   const [txns, setTxns] = useState<Transaction[]>([]);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
 
-  const loadData = () => {
-    setTxns(MockDatabase.getTransactions());
+  const [isLive, setIsLive] = useState(false);
+
+  const loadData = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/wallets/transactions`, { headers: getHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        setTxns(data.map((t: any) => ({
+          id: t.id,
+          userId: t.userId,
+          userName: t.userName || 'Unknown User',
+          type: t.type || 'recharge',
+          amount: t.amount,
+          balanceAfter: t.balanceAfter || 0,
+          date: t.date || new Date().toISOString()
+        })));
+        setIsLive(true);
+        return;
+      }
+    } catch (e) {
+      console.warn('WalletView failed to fetch transactions from API:', e);
+    }
+    setTxns([]);
+    setIsLive(false);
   };
 
   useEffect(() => {

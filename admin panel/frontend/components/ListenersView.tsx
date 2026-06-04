@@ -7,6 +7,7 @@ import {
   TrendingUp, Award, DollarSign, Wallet, ArrowUpRight, Ban, UserCheck, Play
 } from 'lucide-react';
 import { MockDatabase, Listener, WithdrawRequest } from '../lib/mockDb';
+import { API_BASE, getHeaders } from '../lib/api';
 
 interface ListenersViewProps {
   onRefreshStats?: () => void;
@@ -34,9 +35,76 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
     setActiveSubTab(subTab);
   }, [subTab]);
 
-  const loadData = () => {
-    setListeners(MockDatabase.getListeners());
-    setWithdraws(MockDatabase.getWithdrawRequests());
+  const [isLive, setIsLive] = useState(false);
+
+  const loadData = async () => {
+    try {
+      const activeRes = await fetch(`${API_BASE}/creators/active`, { headers: getHeaders() });
+      const pendingRes = await fetch(`${API_BASE}/creators/pending`, { headers: getHeaders() });
+      const suspendedRes = await fetch(`${API_BASE}/creators/suspended`, { headers: getHeaders() });
+      const withdrawsRes = await fetch(`${API_BASE}/admin/withdrawals`, { headers: getHeaders() });
+
+      if (activeRes.ok && pendingRes.ok && suspendedRes.ok && withdrawsRes.ok) {
+        const activeData = await activeRes.json();
+        const pendingData = await pendingRes.json();
+        const suspendedData = await suspendedRes.json();
+        const withdrawsData = await withdrawsRes.json();
+
+        const combinedCreators = [
+          ...activeData.map((c: any) => ({ ...c, status: 'active' })),
+          ...pendingData.map((c: any) => ({ ...c, status: 'pending' })),
+          ...suspendedData.map((c: any) => ({ ...c, status: 'suspended' }))
+        ].map((c: any) => ({
+          id: c.id,
+          name: c.name || c.user?.name || 'Unknown Host',
+          image: c.profile_image || c.user?.profile_image || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+          phone: c.phone || c.user?.phone || 'N/A',
+          email: c.email || c.user?.email || 'N/A',
+          bio: c.bio || '',
+          languages: c.languages ? c.languages.split(',') : ['English'],
+          gender: c.gender || c.user?.gender || 'Female',
+          experience: c.experience || '1 Year',
+          status: c.status,
+          rating: Number(c.rating || 0),
+          completedCalls: Number(c.total_calls || 0),
+          revenueGenerated: Number(c.total_earnings || 0),
+          commissionRate: 60,
+          joinDate: c.created_at?.split('T')[0] || new Date().toISOString().split('T')[0],
+          acceptanceRate: 100,
+          missedCallRate: 0,
+          earningsToday: 0,
+          earningsWeek: 0,
+          earningsMonth: 0,
+          earningsLifetime: Number(c.total_earnings || 0)
+        }));
+
+        setListeners(combinedCreators);
+        setWithdraws(withdrawsData.map((w: any) => ({
+          id: w.id,
+          listenerId: w.creator_id,
+          listenerName: w.creator_name || 'Host',
+          amount: w.amount,
+          upiId: w.upi_id || 'N/A',
+          bankDetails: {
+            bankName: w.bank_name || 'N/A',
+            accountNo: w.account_number || 'N/A',
+            ifsc: w.ifsc_code || 'N/A',
+            holderName: w.account_name || 'N/A'
+          },
+          requestDate: w.created_at || new Date().toISOString(),
+          status: w.status || 'pending',
+          adminNote: w.admin_note
+        })));
+        setIsLive(true);
+        return;
+      }
+    } catch (e) {
+      console.warn('ListenersView failed to load live API data, falling back to mockDb:', e);
+    }
+
+    setListeners([]);
+    setWithdraws([]);
+    setIsLive(false);
   };
 
   useEffect(() => {
@@ -49,10 +117,25 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
   };
 
   // 1. Approve Listener Action
-  const approveListener = (listener: Listener) => {
+  const approveListener = async (listener: Listener) => {
+    try {
+      const res = await fetch(`${API_BASE}/creators/${listener.id}/approve`, {
+        method: 'POST',
+        headers: getHeaders()
+      });
+      if (res.ok) {
+        triggerToast(`${listener.name} approved successfully!`, 'success');
+        loadData();
+        if (onRefreshStats) onRefreshStats();
+        return;
+      }
+    } catch (e) {
+      console.warn('Failed to approve listener on API:', e);
+    }
+
     const updated = listeners.map(l => {
       if (l.id === listener.id) {
-        triggerToast(`${listener.name} approved successfully!`, 'success');
+        triggerToast(`${listener.name} approved successfully! (Sandbox)`, 'success');
         return { ...l, status: 'active' as const, joinDate: new Date().toISOString().split('T')[0] };
       }
       return l;
@@ -63,21 +146,54 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
   };
 
   // 2. Reject/Request Changes Action
-  const rejectListener = (listener: Listener) => {
+  const rejectListener = async (listener: Listener) => {
     if (!window.confirm(`Reject application for ${listener.name}?`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/creators/${listener.id}/reject`, {
+        method: 'POST',
+        headers: getHeaders()
+      });
+      if (res.ok) {
+        triggerToast(`Application rejected for ${listener.name}`, 'error');
+        loadData();
+        if (onRefreshStats) onRefreshStats();
+        return;
+      }
+    } catch (e) {
+      console.warn('Failed to reject listener on API:', e);
+    }
+
     const updated = listeners.filter(l => l.id !== listener.id);
     MockDatabase.saveListeners(updated);
     setListeners(updated);
-    triggerToast(`Application rejected for ${listener.name}`, 'error');
+    triggerToast(`Application rejected for ${listener.name} (Sandbox)`, 'error');
     handleUpdate();
   };
 
   // 3. Suspend Listener Action
-  const suspendListener = (listener: Listener) => {
+  const suspendListener = async (listener: Listener) => {
     const nextStatus = listener.status === 'suspended' ? 'active' : 'suspended';
+    try {
+      const res = await fetch(`${API_BASE}/creators/${listener.id}/suspend`, {
+        method: 'POST',
+        headers: getHeaders()
+      });
+      if (res.ok) {
+        triggerToast(`${listener.name} is now ${nextStatus}`, nextStatus === 'active' ? 'success' : 'error');
+        if (selectedListener?.id === listener.id) {
+          setSelectedListener({ ...selectedListener, status: nextStatus as any });
+        }
+        loadData();
+        if (onRefreshStats) onRefreshStats();
+        return;
+      }
+    } catch (e) {
+      console.warn('Failed to suspend listener on API:', e);
+    }
+
     const updated = listeners.map(l => {
       if (l.id === listener.id) {
-        triggerToast(`${listener.name} is now ${nextStatus}`, nextStatus === 'active' ? 'success' : 'error');
+        triggerToast(`${listener.name} is now ${nextStatus} (Sandbox)`, nextStatus === 'active' ? 'success' : 'error');
         return { ...l, status: nextStatus as any };
       }
       return l;
@@ -98,7 +214,7 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
   };
 
   // 5. Withdrawal status updater
-  const handleWithdrawal = (reqId: string, action: 'approve' | 'pay' | 'reject') => {
+  const handleWithdrawal = async (reqId: string, action: 'approve' | 'pay' | 'reject') => {
     let reason = '';
     let refNum = '';
     let notes = '';
@@ -114,6 +230,34 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
       notes = window.prompt('Enter admin notes (optional):') || 'Processed by admin';
     }
 
+    try {
+      let endpoint = `${API_BASE}/admin/withdrawals/${reqId}/approve`;
+      let body: any = undefined;
+      
+      if (action === 'reject') {
+        endpoint = `${API_BASE}/admin/withdrawals/${reqId}/reject`;
+        body = JSON.stringify({ reason });
+      } else if (action === 'pay') {
+        endpoint = `${API_BASE}/admin/withdrawals/${reqId}/mark-paid`;
+        body = JSON.stringify({ referenceNumber: refNum, notes });
+      }
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: getHeaders(),
+        body
+      });
+
+      if (res.ok) {
+        triggerToast(`Payout request marked successfully`, 'success');
+        loadData();
+        if (onRefreshStats) onRefreshStats();
+        return;
+      }
+    } catch (e) {
+      console.warn('Failed to update withdrawal status on API:', e);
+    }
+
     const updatedReqs = withdraws.map(w => {
       if (w.id === reqId) {
         let nextStatus: WithdrawRequest['status'] = 'pending';
@@ -126,7 +270,6 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
           nextStatus = 'paid';
           updatedW.status = nextStatus;
           updatedW.adminNote = notes;
-          // Sync wallet balance in mock db as well
           const allListeners = MockDatabase.getListeners();
           const targetListener = allListeners.find(l => l.name === w.listenerName);
           if (targetListener) {
@@ -141,7 +284,7 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
           updatedW.adminNote = reason;
         }
         
-        triggerToast(`Payout request ${reqId} marked as ${nextStatus}`, action === 'reject' ? 'error' : 'success');
+        triggerToast(`Payout request ${reqId} marked as ${nextStatus} (Sandbox)`, action === 'reject' ? 'error' : 'success');
         return updatedW;
       }
       return w;

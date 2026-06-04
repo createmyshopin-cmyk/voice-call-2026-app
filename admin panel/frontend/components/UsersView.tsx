@@ -7,6 +7,7 @@ import {
   Trash2, Mail, Phone, Calendar, Landmark, MapPin, X, ExternalLink, Smartphone
 } from 'lucide-react';
 import { MockDatabase, User, Transaction } from '../lib/mockDb';
+import { API_BASE, getHeaders } from '../lib/api';
 
 interface UsersViewProps {
   onRefreshStats?: () => void;
@@ -41,17 +42,51 @@ export default function UsersView({ onRefreshStats, selectedUserId, onClearSelec
     setTimeout(() => setToast(null), 3000);
   };
 
-  const loadData = () => {
-    const allUsers = MockDatabase.getUsers();
-    setUsers(allUsers);
-    
-    // Check if a specific user was selected via global prop (e.g. from search palette)
-    if (selectedUserId) {
-      const matched = allUsers.find(u => u.id === selectedUserId);
-      if (matched) {
-        setActiveUser(matched);
+  const [isLive, setIsLive] = useState(false);
+
+  const loadData = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/users`, { headers: getHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        const mappedUsers = data.map((u: any) => ({
+          id: u.id,
+          name: u.name || 'Unknown User',
+          image: u.profile_image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
+          phone: u.phone || 'N/A',
+          email: u.email || 'N/A',
+          coins: u.coins || 0,
+          totalCalls: u.total_calls || 0,
+          totalDuration: u.total_duration || 0,
+          totalRecharge: u.total_recharge || 0,
+          totalSpent: u.total_spent || 0,
+          country: u.country || 'India',
+          device: u.device || 'Android Device',
+          registeredAt: u.created_at || new Date().toISOString(),
+          status: u.status || 'active',
+          reportsCount: 0,
+          safetyScore: 100
+        }));
+        setUsers(mappedUsers);
+        setIsLive(true);
+
+        if (selectedUserId) {
+          const matched = mappedUsers.find((u: any) => u.id === selectedUserId);
+          if (matched) {
+            setActiveUser(matched);
+          }
+          if (onClearSelectedUser) onClearSelectedUser();
+        }
+        return;
       }
-      if (onClearSelectedUser) onClearSelectedUser();
+    } catch (e) {
+      console.warn('UsersView failed to fetch live users, falling back to mockDb:', e);
+    }
+
+    setUsers([]);
+    setIsLive(false);
+    if (selectedUserId && onClearSelectedUser) {
+      onClearSelectedUser();
     }
   };
 
@@ -59,51 +94,68 @@ export default function UsersView({ onRefreshStats, selectedUserId, onClearSelec
     loadData();
   }, [selectedUserId]);
 
-  // Handle global page changes when data updates
   const handleUpdate = () => {
     loadData();
     if (onRefreshStats) onRefreshStats();
   };
 
-  // Block/Unblock Action
-  const toggleBlockStatus = (user: User) => {
+  const toggleBlockStatus = async (user: User) => {
+    const isBlocking = user.status === 'active';
+    const actionPath = isBlocking ? 'block' : 'unblock';
+
+    try {
+      const res = await fetch(`${API_BASE}/users/${user.id}/${actionPath}`, {
+        method: 'POST',
+        headers: getHeaders()
+      });
+
+      if (res.ok) {
+        triggerToast(`${user.name} is now ${isBlocking ? 'blocked' : 'active'}`, isBlocking ? 'error' : 'success');
+        if (activeUser?.id === user.id) {
+          setActiveUser({ ...activeUser, status: isBlocking ? 'blocked' : 'active' });
+        }
+        loadData();
+        if (onRefreshStats) onRefreshStats();
+        return;
+      }
+    } catch (e) {
+      console.warn('Failed to toggle block status on API:', e);
+    }
+
     const updatedUsers: User[] = users.map(u => {
       if (u.id === user.id) {
         const nextStatus: 'active' | 'blocked' = u.status === 'active' ? 'blocked' : 'active';
-        triggerToast(`${user.name} is now ${nextStatus}`, nextStatus === 'active' ? 'success' : 'error');
+        triggerToast(`${user.name} is now ${nextStatus} (Sandbox)`, nextStatus === 'active' ? 'success' : 'error');
         return { ...u, status: nextStatus };
       }
       return u;
     });
     MockDatabase.saveUsers(updatedUsers);
-    
-    // Update current active profile modal if open
+
     if (activeUser?.id === user.id) {
       setActiveUser({ ...activeUser, status: activeUser.status === 'active' ? 'blocked' : 'active' });
     }
-    
+
     setUsers(updatedUsers);
     handleUpdate();
   };
 
-  // Delete User Action
   const deleteUser = (userId: string, name: string) => {
     if (!window.confirm(`Are you sure you want to permanently delete user ${name}?`)) return;
-    
+
     const updatedUsers = users.filter(u => u.id !== userId);
     MockDatabase.saveUsers(updatedUsers);
-    
+
     if (activeUser?.id === userId) {
       setActiveUser(null);
     }
-    
+
     triggerToast(`Deleted user ${name}`, 'error');
     setUsers(updatedUsers);
     handleUpdate();
   };
 
-  // Add or Deduct Coins Action
-  const adjustCoins = (e: React.FormEvent) => {
+  const adjustCoins = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeUser) return;
     if (coinAmount <= 0) {
@@ -113,13 +165,38 @@ export default function UsersView({ onRefreshStats, selectedUserId, onClearSelec
 
     const multiplier = adjustCoinsMode === 'add' ? 1 : -1;
     const finalAmount = coinAmount * multiplier;
-    
+
     if (adjustCoinsMode === 'deduct' && activeUser.coins < coinAmount) {
       triggerToast('Insufficient coins balance', 'error');
       return;
     }
 
-    // Save Updated user
+    try {
+      const res = await fetch(`${API_BASE}/wallets/adjust`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          userId: activeUser.id,
+          amount: finalAmount,
+          reason: adjustmentReason || 'Admin adjustment'
+        })
+      });
+
+      if (res.ok) {
+        triggerToast(`Adjusted ${coinAmount} coins for ${activeUser.name}`, 'success');
+        setAdjustCoinsMode(null);
+        loadData();
+        if (onRefreshStats) onRefreshStats();
+        setActiveUser({ ...activeUser, coins: activeUser.coins + finalAmount });
+        return;
+      } else {
+        const errorText = await res.text();
+        triggerToast(`Adjustment failed: ${errorText}`, 'error');
+      }
+    } catch (err) {
+      console.warn('Failed to adjust coins on API:', err);
+    }
+
     const updatedUsers: User[] = users.map(u => {
       if (u.id === activeUser.id) {
         const newBal = u.coins + finalAmount;
@@ -133,7 +210,6 @@ export default function UsersView({ onRefreshStats, selectedUserId, onClearSelec
     });
     MockDatabase.saveUsers(updatedUsers);
 
-    // Save Transaction
     const allTxns = MockDatabase.getTransactions();
     const newTxn: Transaction = {
       id: `TXN${Date.now().toString().slice(-4)}`,
@@ -146,13 +222,12 @@ export default function UsersView({ onRefreshStats, selectedUserId, onClearSelec
     };
     MockDatabase.saveTransactions([newTxn, ...allTxns]);
 
-    // Update state
     const match = updatedUsers.find(u => u.id === activeUser.id);
     if (match) setActiveUser(match);
-    
+
     setUsers(updatedUsers);
     setAdjustCoinsMode(null);
-    triggerToast(`Adjusted ${coinAmount} coins for ${activeUser.name}`, 'success');
+    triggerToast(`Adjusted ${coinAmount} coins (Sandbox)`, 'success');
     handleUpdate();
   };
 
