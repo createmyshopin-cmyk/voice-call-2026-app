@@ -38,6 +38,8 @@ export default function UsersManagement({ embedded }: { embedded?: boolean }) {
   const [status, setStatus] = useState<ListUsersParams['status']>('all');
   const [onboarding, setOnboarding] =
     useState<ListUsersParams['onboarding']>('all');
+  const [isCreator, setIsCreator] =
+    useState<ListUsersParams['isCreator']>('all');
   const [sortBy, setSortBy] = useState<SortField>('createdAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [loading, setLoading] = useState(true);
@@ -64,6 +66,7 @@ export default function UsersManagement({ embedded }: { embedded?: boolean }) {
       onboarding,
       sortBy,
       sortOrder,
+      isCreator,
     });
 
     if (res.ok && res.data) {
@@ -84,7 +87,7 @@ export default function UsersManagement({ embedded }: { embedded?: boolean }) {
         : connectionErrorMessage('network'),
     );
     setLoading(false);
-  }, [page, search, gender, status, onboarding, sortBy, sortOrder]);
+  }, [page, search, gender, status, onboarding, sortBy, sortOrder, isCreator]);
 
   useEffect(() => {
     loadUsers();
@@ -190,6 +193,19 @@ export default function UsersManagement({ embedded }: { embedded?: boolean }) {
             ]}
             onChange={(v) => {
               setOnboarding(v as ListUsersParams['onboarding']);
+              setPage(1);
+            }}
+          />
+          <FilterSelect
+            label="Listener Status"
+            value={isCreator ?? 'all'}
+            options={[
+              { value: 'all', label: 'All' },
+              { value: 'listener', label: 'Listeners' },
+              { value: 'non_listener', label: 'Non-Listeners' },
+            ]}
+            onChange={(v) => {
+              setIsCreator(v as ListUsersParams['isCreator']);
               setPage(1);
             }}
           />

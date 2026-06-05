@@ -13,6 +13,7 @@ import 'calling_screen.dart';
 import '../widgets/call_history_card.dart';
 import 'recharge_screen.dart';
 import 'listener_dashboard_screen.dart';
+import 'listener_application_screen.dart';
 import 'agora_debug_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -108,7 +109,7 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.fromLTRB(20, 80, 20, 200),
         children: [
           Text(
-            'No creators available right now.',
+            'No listeners available right now.',
             textAlign: TextAlign.center,
             style: GoogleFonts.poppins(fontSize: 16, color: const Color(0xFF777777)),
           ),
@@ -127,20 +128,77 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  List<Map<String, dynamic>> _getTabs(AuthProvider authProvider) {
+    if (authProvider.isListener) {
+      return [
+        {
+          'label': 'Home',
+          'icon': Icons.home_outlined,
+          'activeIcon': Icons.home,
+        },
+        {
+          'label': 'Calls',
+          'icon': Icons.access_time,
+          'activeIcon': Icons.access_time_filled,
+        },
+        {
+          'label': 'Wallet',
+          'icon': Icons.account_balance_wallet_outlined,
+          'activeIcon': Icons.account_balance_wallet,
+        },
+        {
+          'label': 'Listener',
+          'icon': Icons.headphones_outlined,
+          'activeIcon': Icons.headphones,
+        },
+        {
+          'label': 'Profile',
+          'icon': Icons.person_outline,
+          'activeIcon': Icons.person,
+        },
+      ];
+    } else {
+      return [
+        {
+          'label': 'Home',
+          'icon': Icons.home_outlined,
+          'activeIcon': Icons.home,
+        },
+        {
+          'label': 'Wallet',
+          'icon': Icons.account_balance_wallet_outlined,
+          'activeIcon': Icons.account_balance_wallet,
+        },
+        {
+          'label': 'Profile',
+          'icon': Icons.person_outline,
+          'activeIcon': Icons.person,
+        },
+      ];
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final coinProvider = context.watch<WalletProvider>();
-    final authProvider = context.read<AuthProvider>();
+    final authProvider = context.watch<AuthProvider>();
+    final isListener = authProvider.isListener;
+    final maxTabs = isListener ? 5 : 3;
+    final activeIndex = _currentTabIndex.clamp(0, maxTabs - 1);
+    
+    final isProfileTab = isListener ? (activeIndex == 4) : (activeIndex == 2);
+    final isListenerDashboardTab = isListener && (activeIndex == 3);
+    final isDarkBg = isProfileTab || isListenerDashboardTab;
 
     return Scaffold(
-      backgroundColor: _currentTabIndex == 3 ? const Color(0xFF080E1A) : const Color(0xFFF8F8F8),
+      backgroundColor: isDarkBg ? const Color(0xFF080E1A) : const Color(0xFFF8F8F8),
       body: SafeArea(
         bottom: false,
         child: Stack(
           children: [
             // Screen content based on current active bottom tab
             Positioned.fill(
-              child: _buildTabContent(authProvider, coinProvider),
+              child: _buildTabContent(activeIndex, authProvider, coinProvider),
             ),
 
             // Fixed Bottom Navigation Bar
@@ -148,11 +206,11 @@ class _HomeScreenState extends State<HomeScreen> {
               bottom: 0,
               left: 0,
               right: 0,
-              child: _buildBottomNavBar(),
+              child: _buildBottomNavBar(authProvider, activeIndex),
             ),
 
             // Floating Random Match Button (Visible only on the Home Tab)
-            if (_currentTabIndex == 0)
+            if (activeIndex == 0)
               Positioned(
                 bottom: 110,
                 right: 20,
@@ -167,18 +225,34 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // Build content area depending on the selected tab
-  Widget _buildTabContent(AuthProvider authProvider, WalletProvider coinProvider) {
-    switch (_currentTabIndex) {
-      case 0:
-        return _buildHomeView(coinProvider);
-      case 1:
-        return _buildRecentView();
-      case 2:
-        return _buildFavouriteView();
-      case 3:
-        return _buildProfileView(authProvider, coinProvider);
-      default:
-        return _buildHomeView(coinProvider);
+  Widget _buildTabContent(int activeIndex, AuthProvider authProvider, WalletProvider coinProvider) {
+    final isListener = authProvider.isListener;
+    if (isListener) {
+      switch (activeIndex) {
+        case 0:
+          return _buildHomeView(coinProvider);
+        case 1:
+          return _buildRecentView();
+        case 2:
+          return const CoinRechargeScreen(isTab: true);
+        case 3:
+          return const ListenerDashboardScreen(isTab: true);
+        case 4:
+          return _buildProfileView(authProvider, coinProvider);
+        default:
+          return _buildHomeView(coinProvider);
+      }
+    } else {
+      switch (activeIndex) {
+        case 0:
+          return _buildHomeView(coinProvider);
+        case 1:
+          return const CoinRechargeScreen(isTab: true);
+        case 2:
+          return _buildProfileView(authProvider, coinProvider);
+        default:
+          return _buildHomeView(coinProvider);
+      }
     }
   }
 
@@ -354,7 +428,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return CallHistoryCard(
           call: call,
           currentUserId: userId,
-          isCreatorView: false,
+          isListenerView: false,
           onTap: () {
             Navigator.push(
               context,
@@ -440,188 +514,411 @@ class _HomeScreenState extends State<HomeScreen> {
       uidText = '${uidText.substring(0, 9)}-';
     }
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 120),
-      physics: const BouncingScrollPhysics(),
-      child: Column(
-        children: [
-          // 1. Top Card (Avatar & UID)
-          Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E2637),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Stack(
-              children: [
-                // Top Right Pencil edit button
-                Positioned(
-                  top: 0,
-                  right: 0,
-                  child: GestureDetector(
-                    onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Profile edit is coming soon!')),
-                      );
-                    },
-                    child: const Icon(
-                      Icons.edit_outlined,
-                      color: Colors.white70,
-                      size: 22,
+    return RefreshIndicator(
+      onRefresh: () => authProvider.refreshRole(),
+      color: const Color(0xFFFF1493),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 120),
+        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+        child: Column(
+          children: [
+            // Application Status Banner/Card
+            if (authProvider.creatorStatus == 'pending')
+              Container(
+                margin: const EdgeInsets.only(bottom: 20),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E2637),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFFFCC00).withOpacity(0.5), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFFFCC00).withOpacity(0.1),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFFFCC00),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.hourglass_empty, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Pending Review',
+                            style: GoogleFonts.poppins(
+                              color: const Color(0xFFFFCC00),
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Your listener application is under review. We will notify you once approved.',
+                            style: GoogleFonts.poppins(
+                              color: const Color(0xFFA6ABBB),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else if (authProvider.creatorStatus == 'rejected')
+              Container(
+                margin: const EdgeInsets.only(bottom: 20),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E2637),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFFD73357).withOpacity(0.5), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFD73357).withOpacity(0.1),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: const BoxDecoration(
+                            color: Color(0xFFD73357),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.error_outline, color: Colors.white, size: 24),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Application Rejected',
+                                style: GoogleFonts.poppins(
+                                  color: const Color(0xFFD73357),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Your listener application was not approved. You can update your profile and try again.',
+                                style: GoogleFonts.poppins(
+                                  color: const Color(0xFFA6ABBB),
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const ListenerApplicationScreen(),
+                            ),
+                          ).then((_) {
+                            authProvider.refreshRole();
+                          });
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFD73357),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Text(
+                          'Re-apply Now',
+                          style: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else if (authProvider.creatorStatus == 'suspended')
+              Container(
+                margin: const EdgeInsets.only(bottom: 20),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E2637),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: const Color(0xFF555555).withOpacity(0.5), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.05),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF555555),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.block, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Account Suspended',
+                            style: GoogleFonts.poppins(
+                              color: const Color(0xFF8A90A0),
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Your listener account has been suspended. Please contact support for assistance.',
+                            style: GoogleFonts.poppins(
+                              color: const Color(0xFFA6ABBB),
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // 1. Top Card (Avatar & UID)
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E2637),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Stack(
+                children: [
+                  // Top Right Pencil edit button
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: GestureDetector(
+                      onTap: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Profile edit is coming soon!')),
+                        );
+                      },
+                      child: const Icon(
+                        Icons.edit_outlined,
+                        color: Colors.white70,
+                        size: 22,
+                      ),
                     ),
                   ),
-                ),
-                // Avatar + Name column
-                Center(
-                  child: Column(
-                    children: [
-                      const SizedBox(height: 12),
-                      Container(
-                        width: 106,
-                        height: 106,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: const Color(0xFF424855).withOpacity(0.5),
+                  // Avatar + Name column
+                  Center(
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 12),
+                        Container(
+                          width: 106,
+                          height: 106,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: const Color(0xFF424855).withOpacity(0.5),
+                          ),
+                          alignment: Alignment.center,
+                          child: const CircleAvatar(
+                            radius: 50,
+                            backgroundImage: NetworkImage('https://lh3.googleusercontent.com/aida-public/AB6AXuDOP4FplSKyT3BfvOwZNGB_Hbamv85ajgLxN149snQwvYJ6mtcWe5XUW6ho4JDpgPPu7J_ejkrjQSS8fD__9JiHbpyoOSKHVJ8AtROBAaNiXKsf70Mv43lFx78hB39d7hdYu4tCKOx6cT4LQLQnZWhE4iMaYQeRx64Abti4ceA87z9KX5bGM_xdj32byrKrRo6K8B2_97XcPpmuc3_PN9iTdik5-9uwgxbPWHPqhEzBSQdAv18RJKoZ0PVepL8S220Mr3OPrKaz9rk'),
+                          ),
                         ),
-                        alignment: Alignment.center,
-                        child: const CircleAvatar(
-                          radius: 50,
-                          backgroundImage: NetworkImage('https://lh3.googleusercontent.com/aida-public/AB6AXuDOP4FplSKyT3BfvOwZNGB_Hbamv85ajgLxN149snQwvYJ6mtcWe5XUW6ho4JDpgPPu7J_ejkrjQSS8fD__9JiHbpyoOSKHVJ8AtROBAaNiXKsf70Mv43lFx78hB39d7hdYu4tCKOx6cT4LQLQnZWhE4iMaYQeRx64Abti4ceA87z9KX5bGM_xdj32byrKrRo6K8B2_97XcPpmuc3_PN9iTdik5-9uwgxbPWHPqhEzBSQdAv18RJKoZ0PVepL8S220Mr3OPrKaz9rk'),
+                        const SizedBox(height: 16),
+                        Text(
+                          uidText,
+                          style: GoogleFonts.poppins(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        uidText,
-                        style: GoogleFonts.poppins(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                    ],
+                        const SizedBox(height: 8),
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          // 2. Menu Card (Wallet, Transactions, etc.)
-          Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E2637),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              children: [
-                _buildProfileMenuItem(
-                  icon: Icons.account_balance_wallet_outlined,
-                  title: 'Wallet',
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const CoinRechargeScreen()),
-                    );
-                  },
-                ),
-                _buildDivider(),
-                _buildProfileMenuItem(
-                  icon: Icons.receipt_long_outlined,
-                  title: 'Transactions',
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Transactions list is coming soon!')),
-                    );
-                  },
-                ),
-                _buildDivider(),
-                _buildProfileMenuItem(
-                  icon: Icons.translate_outlined,
-                  title: 'Language Settings',
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Language settings is coming soon!')),
-                    );
-                  },
-                ),
-                _buildDivider(),
-                _buildProfileMenuItem(
-                  icon: Icons.loop_outlined,
-                  title: 'Switch to Listener',
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const ListenerDashboardScreen(),
-                      ),
-                    );
-                  },
-                ),
-                _buildDivider(),
-                _buildProfileMenuItem(
-                  icon: Icons.headset_mic_outlined,
-                  title: 'Help & Support',
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Support ticket system is coming soon!')),
-                    );
-                  },
-                ),
-                _buildDivider(),
-                _buildProfileMenuItem(
-                  icon: Icons.bug_report_outlined,
-                  title: 'Agora Debug',
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const AgoraDebugScreen()),
-                    );
-                  },
-                ),
-                _buildDivider(),
-                _buildProfileMenuItem(
-                  icon: Icons.manage_accounts_outlined,
-                  title: 'Account Settings',
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Account settings is coming soon!')),
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          // 3. Log Out Card
-          Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF1E2637),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: _buildProfileMenuItem(
-              icon: Icons.logout_outlined,
-              title: 'Log Out',
-              onTap: () async {
-                await authProvider.signOut();
-              },
-            ),
-          ),
-
-          // 4. Version Info
-          Padding(
-            padding: const EdgeInsets.only(top: 24),
-            child: Text(
-              'version 1.1.22',
-              style: GoogleFonts.poppins(
-                color: const Color(0xFF707584),
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
+                ],
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: 20),
+
+            // 2. Menu Card (Wallet, Transactions, etc.)
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E2637),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Column(
+                children: [
+                  _buildProfileMenuItem(
+                    icon: Icons.account_balance_wallet_outlined,
+                    title: 'Wallet',
+                    onTap: () {
+                      setState(() {
+                        _currentTabIndex = authProvider.isListener ? 2 : 1;
+                      });
+                    },
+                  ),
+                  _buildDivider(),
+                  if (authProvider.isListener) ...[
+                    _buildProfileMenuItem(
+                      icon: Icons.dashboard_outlined,
+                      title: 'Listener Dashboard',
+                      onTap: () {
+                        setState(() {
+                          _currentTabIndex = 3; // Listener tab in listener nav
+                        });
+                      },
+                    ),
+                    _buildDivider(),
+                    _buildProfileMenuItem(
+                      icon: Icons.history,
+                      title: 'Call Statistics',
+                      onTap: () {
+                        setState(() {
+                          _currentTabIndex = 1; // Calls tab in listener nav
+                        });
+                      },
+                    ),
+                    _buildDivider(),
+                  ],
+                  if (!authProvider.isListener && 
+                      authProvider.creatorStatus != 'pending' && 
+                      authProvider.creatorStatus != 'suspended') ...[
+                    _buildProfileMenuItem(
+                      icon: Icons.headphones_outlined,
+                      title: 'Switch to Listener',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const ListenerApplicationScreen(),
+                          ),
+                        ).then((_) {
+                          authProvider.refreshRole();
+                        });
+                      },
+                    ),
+                    _buildDivider(),
+                  ],
+                  _buildProfileMenuItem(
+                    icon: Icons.receipt_long_outlined,
+                    title: 'Transactions',
+                    onTap: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Transactions list is coming soon!')),
+                      );
+                    },
+                  ),
+                  _buildDivider(),
+                  _buildProfileMenuItem(
+                    icon: Icons.translate_outlined,
+                    title: 'Language Settings',
+                    onTap: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Language settings is coming soon!')),
+                      );
+                    },
+                  ),
+                  _buildDivider(),
+                  _buildProfileMenuItem(
+                    icon: Icons.headset_mic_outlined,
+                    title: 'Help & Support',
+                    onTap: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Support ticket system is coming soon!')),
+                      );
+                    },
+                  ),
+                  _buildDivider(),
+                  _buildProfileMenuItem(
+                    icon: Icons.bug_report_outlined,
+                    title: 'Agora Debug',
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const AgoraDebugScreen()),
+                      );
+                    },
+                  ),
+                  _buildDivider(),
+                  _buildProfileMenuItem(
+                    icon: Icons.manage_accounts_outlined,
+                    title: 'Account Settings',
+                    onTap: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Account settings is coming soon!')),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // 3. Log Out Card
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E2637),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: _buildProfileMenuItem(
+                icon: Icons.logout_outlined,
+                title: 'Log Out',
+                onTap: () async {
+                  await authProvider.signOut();
+                },
+              ),
+            ),
+
+            // 4. Version Info
+            Padding(
+              padding: const EdgeInsets.only(top: 24),
+              child: Text(
+                'version 1.1.22',
+                style: GoogleFonts.poppins(
+                  color: const Color(0xFF707584),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1344,8 +1641,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // --- FIXED BOTTOM NAVIGATION BAR ---
-  Widget _buildBottomNavBar() {
-    bool isDark = _currentTabIndex == 3;
+  Widget _buildBottomNavBar(AuthProvider authProvider, int activeIndex) {
+    final isListener = authProvider.isListener;
+    final isProfileTab = isListener ? (activeIndex == 4) : (activeIndex == 2);
+    final isListenerDashboardTab = isListener && (activeIndex == 3);
+    bool isDark = isProfileTab || isListenerDashboardTab;
+    
+    final tabs = _getTabs(authProvider);
+
     return Container(
       height: 90,
       decoration: BoxDecoration(
@@ -1364,19 +1667,34 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _buildBottomNavItem(Icons.home_outlined, Icons.home, 'Home', 0),
-          _buildBottomNavItem(Icons.access_time, Icons.access_time_filled, 'Recent', 1),
-          _buildBottomNavItem(Icons.favorite_border, Icons.favorite, 'Favourite', 2),
-          _buildBottomNavItem(Icons.person_outline, Icons.person, 'Profile', 3),
-        ],
+        children: List.generate(tabs.length, (index) {
+          final tab = tabs[index];
+          return _buildBottomNavItem(
+            authProvider,
+            activeIndex,
+            tab['icon'] as IconData,
+            tab['activeIcon'] as IconData,
+            tab['label'] as String,
+            index,
+          );
+        }),
       ),
     );
   }
 
-  Widget _buildBottomNavItem(IconData inactiveIcon, IconData activeIcon, String label, int index) {
-    bool isActive = _currentTabIndex == index;
-    bool isDark = _currentTabIndex == 3;
+  Widget _buildBottomNavItem(
+    AuthProvider authProvider,
+    int activeIndex,
+    IconData inactiveIcon,
+    IconData activeIcon,
+    String label,
+    int index,
+  ) {
+    bool isActive = activeIndex == index;
+    final isListener = authProvider.isListener;
+    final isProfileTab = isListener ? (activeIndex == 4) : (activeIndex == 2);
+    final isListenerDashboardTab = isListener && (activeIndex == 3);
+    bool isDark = isProfileTab || isListenerDashboardTab;
     Color inactiveColor = isDark ? const Color(0xFF707584) : const Color(0xFF777777);
 
     return ScalePressedButton(
@@ -1386,7 +1704,7 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       },
       child: Container(
-        width: 80,
+        width: isListener ? 65 : 85,
         color: Colors.transparent, // expand touch target area
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1412,7 +1730,7 @@ class _HomeScreenState extends State<HomeScreen> {
             Text(
               label,
               style: GoogleFonts.poppins(
-                fontSize: 12,
+                fontSize: isListener ? 10 : 12,
                 fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
                 color: isActive ? const Color(0xFFFF1493) : inactiveColor,
               ),

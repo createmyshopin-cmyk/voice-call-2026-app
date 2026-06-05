@@ -17,7 +17,7 @@ export interface User {
   email: string;
   coins: number;
   totalCalls: number;
-  status: 'active' | 'blocked';
+  status: 'active' | 'blocked' | 'suspended';
   registeredAt: string;
   firebase_uid?: string;
   fullName?: string;
@@ -81,7 +81,7 @@ function rowToUser(row: Record<string, unknown>): User {
     email: (row.email as string) || '',
     coins: Number(row.coins ?? 0),
     totalCalls: Number(row.total_calls ?? 0),
-    status: ((row.status as string) === 'blocked' ? 'blocked' : 'active'),
+    status: (row.status === 'blocked' || row.status === 'suspended' ? row.status : 'active'),
     registeredAt: (row.created_at as string) || new Date().toISOString(),
     firebase_uid: (row.firebase_uid as string) || undefined,
     fullName,
@@ -284,7 +284,7 @@ export class UsersService {
 
   // ─── Update ────────────────────────────────────────────────────────────────
 
-  async updateStatus(id: string, status: 'active' | 'blocked') {
+  async updateStatus(id: string, status: 'active' | 'blocked' | 'suspended') {
     if (this.supabase.isConfigured) {
       try {
         const { error } = await this.supabase

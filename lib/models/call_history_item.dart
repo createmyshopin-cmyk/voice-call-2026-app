@@ -99,13 +99,13 @@ class CallHistoryItem {
 
   /// Text copied when the user taps the copy icon on a history card.
   String copyableSummary({
-    required bool isCreatorView,
+    required bool isListenerView,
     required String currentUserId,
   }) {
-    final partyLabel = isCreatorView ? 'User Name' : 'Creator Name';
+    final partyLabel = isListenerView ? 'User Name' : 'Listener Name';
     final partyValue = otherPartyName(currentUserId);
-    final amountLabel = isCreatorView ? 'Earnings' : 'Coins Used';
-    final amountValue = isCreatorView
+    final amountLabel = isListenerView ? 'Earnings' : 'Coins Used';
+    final amountValue = isListenerView
         ? '+$coinsDeducted coins'
         : '$coinsDeducted coins';
 

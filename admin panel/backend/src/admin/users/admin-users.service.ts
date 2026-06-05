@@ -63,7 +63,7 @@ export interface AdminUserListItem {
   totalMinutes: number;
   onlineStatus: 'online' | 'offline';
   onboardingCompleted: boolean;
-  accountStatus: 'active' | 'blocked';
+  accountStatus: 'active' | 'blocked' | 'suspended';
   createdAt: string;
 }
 
@@ -85,6 +85,7 @@ export interface AdminUserDetailResponse {
   isCreator: boolean;
   isVerified: boolean;
   blocked: boolean;
+  status: 'active' | 'blocked' | 'suspended';
   accountCreatedAt: string;
   updatedAt: string | null;
   totalCalls: number;
@@ -125,6 +126,7 @@ export class AdminUsersService {
     const genderFilter = dto.gender ?? 'all';
     const statusFilter = dto.status ?? 'all';
     const onboardingFilter = dto.onboarding ?? 'all';
+    const isCreatorFilter = dto.isCreator ?? 'all';
 
     if (this.supabase.isConfigured) {
       try {
@@ -137,6 +139,7 @@ export class AdminUsersService {
           genderFilter,
           statusFilter,
           onboardingFilter,
+          isCreatorFilter,
         });
         if (result) return result;
       } catch (e) {
@@ -153,6 +156,7 @@ export class AdminUsersService {
       genderFilter,
       statusFilter,
       onboardingFilter,
+      isCreatorFilter,
     });
   }
 
@@ -170,6 +174,32 @@ export class AdminUsersService {
     return this.getDetailFromMemory(id);
   }
 
+  async updateUserStatus(id: string, status: 'active' | 'blocked' | 'suspended'): Promise<AdminUserDetailResponse> {
+    if (this.supabase.isConfigured) {
+      try {
+        const client = this.supabase.getClient();
+        const { error } = await client
+          .from('users')
+          .update({ status, updated_at: new Date().toISOString() })
+          .eq('id', id);
+        if (error) {
+          throw new Error(`Failed to update status in database: ${error.message}`);
+        }
+      } catch (e) {
+        console.warn('AdminUsersService.updateUserStatus Supabase error:', (e as Error).message);
+        throw e;
+      }
+    }
+
+    const memUsers = this.usersService.getMemUsers();
+    const mem = memUsers.find((u) => u.id === id);
+    if (mem) {
+      mem.status = status;
+    }
+
+    return this.getUserDetail(id);
+  }
+
   private async listFromSupabase(params: {
     page: number;
     limit: number;
@@ -179,6 +209,7 @@ export class AdminUsersService {
     genderFilter: string;
     statusFilter: string;
     onboardingFilter: string;
+    isCreatorFilter: string;
   }): Promise<{ users: AdminUserListItem[]; total: number } | null> {
     const client = this.supabase.getClient();
     const sortColumn = this.sortColumn(params.sortBy);
@@ -198,6 +229,12 @@ export class AdminUsersService {
       q = q.eq('onboarding_completed', true);
     } else if (params.onboardingFilter === 'not_completed') {
       q = q.eq('onboarding_completed', false);
+    }
+
+    if (params.isCreatorFilter === 'listener') {
+      q = q.eq('is_creator', true);
+    } else if (params.isCreatorFilter === 'non_listener') {
+      q = q.eq('is_creator', false);
     }
 
     if (params.search) {
@@ -299,6 +336,7 @@ export class AdminUsersService {
       isCreator,
       isVerified: Boolean(userRow.is_verified ?? false),
       blocked: (userRow.status as string) === 'blocked',
+      status: (userRow.status as 'active' | 'blocked' | 'suspended') || 'active',
       accountCreatedAt: (userRow.created_at as string) || new Date().toISOString(),
       updatedAt: (userRow.updated_at as string) || null,
       totalCalls: Number(userRow.total_calls ?? callStats.totalCalls),
@@ -404,7 +442,7 @@ export class AdminUsersService {
       onlineStatus: computeUserOnlineStatus(isCreator, profile),
       onboardingCompleted: Boolean(row.onboarding_completed ?? false),
       accountStatus:
-        (row.status as string) === 'blocked' ? 'blocked' : 'active',
+        row.status === 'blocked' || row.status === 'suspended' ? row.status : 'active',
       createdAt: (row.created_at as string) || new Date().toISOString(),
     };
   }
@@ -445,6 +483,7 @@ export class AdminUsersService {
     genderFilter: string;
     statusFilter: string;
     onboardingFilter: string;
+    isCreatorFilter: string;
   }): { users: AdminUserListItem[]; total: number } {
     const enriched = this.usersService.getMemUsers().map((u) =>
       this.mapMemoryListItem(u),
@@ -467,8 +506,12 @@ export class AdminUsersService {
         params.statusFilter === 'all' ||
         (params.statusFilter === 'online' && u.onlineStatus === 'online') ||
         (params.statusFilter === 'offline' && u.onlineStatus === 'offline');
+      const matchIsCreator =
+        params.isCreatorFilter === 'all' ||
+        (params.isCreatorFilter === 'listener' && (u as any).isCreator) ||
+        (params.isCreatorFilter === 'non_listener' && !(u as any).isCreator);
 
-      return matchSearch && matchGender && matchOnboarding && matchStatus;
+      return matchSearch && matchGender && matchOnboarding && matchStatus && matchIsCreator;
     });
 
     filtered = filtered.sort((a, b) => this.compareListItems(a, b, params.sortBy, params.sortOrder));
@@ -481,7 +524,7 @@ export class AdminUsersService {
     };
   }
 
-  private mapMemoryListItem(u: User): AdminUserListItem {
+  private mapMemoryListItem(u: User): AdminUserListItem & { isCreator?: boolean } {
     const age = calculateAge(u.dateOfBirth);
     return {
       id: u.id,
@@ -496,8 +539,9 @@ export class AdminUsersService {
       totalMinutes: 0,
       onlineStatus: 'offline',
       onboardingCompleted: Boolean(u.onboardingCompleted),
-      accountStatus: u.status === 'blocked' ? 'blocked' : 'active',
+      accountStatus: u.status === 'blocked' || u.status === 'suspended' ? u.status : 'active',
       createdAt: u.registeredAt,
+      isCreator: (u as any).isCreator ?? false,
     };
   }
 
@@ -547,6 +591,7 @@ export class AdminUsersService {
       isCreator: false,
       isVerified: false,
       blocked: u.status === 'blocked',
+      status: u.status,
       accountCreatedAt: u.registeredAt,
       updatedAt: null,
       totalCalls: u.totalCalls,

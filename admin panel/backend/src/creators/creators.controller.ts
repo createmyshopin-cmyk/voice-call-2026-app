@@ -7,6 +7,7 @@ import {
   HttpStatus,
   UseGuards,
   Request,
+  Body,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { CreatorsService } from './creators.service';
@@ -19,6 +20,13 @@ import { AdminGuard } from '../auth/admin.guard';
 @Controller('creators')
 export class CreatorsController {
   constructor(private readonly creatorsService: CreatorsService) {}
+
+  @Post()
+  @ApiOperation({ summary: 'Apply to become a host listener' })
+  @ApiResponse({ status: 201, description: 'Application submitted successfully.' })
+  async apply(@Request() req: { user: { id: string } }, @Body() dto: any) {
+    return this.creatorsService.apply(req.user.id, dto);
+  }
 
   @Get()
   @ApiOperation({ summary: 'Get all active host listeners' })
@@ -54,6 +62,15 @@ export class CreatorsController {
   @ApiResponse({ status: 403, description: 'Admin access required.' })
   getSuspended() {
     return this.creatorsService.getSuspended();
+  }
+
+  @Get('rejected')
+  @UseGuards(AdminGuard)
+  @ApiOperation({ summary: 'Get rejected host applications (admin)' })
+  @ApiResponse({ status: 200, description: 'List of rejected host profiles.' })
+  @ApiResponse({ status: 403, description: 'Admin access required.' })
+  getRejected() {
+    return this.creatorsService.getRejected();
   }
 
   @Post('heartbeat')

@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/wallet_provider.dart';
 import '../services/api_client.dart';
-
+import 'package:razorpay_flutter/razorpay_flutter.dart';
 class CoinPackage {
   final String packageId;
   final int coins;
@@ -27,7 +27,8 @@ class CoinPackage {
 }
 
 class CoinRechargeScreen extends StatefulWidget {
-  const CoinRechargeScreen({super.key});
+  final bool isTab;
+  const CoinRechargeScreen({super.key, this.isTab = false});
 
   @override
   State<CoinRechargeScreen> createState() => _CoinRechargeScreenState();
@@ -58,7 +59,7 @@ class _CoinRechargeScreenState extends State<CoinRechargeScreen> {
         return;
       }
       final dio = createApiDio(accessToken: token);
-      final response = await dio.get('/api/coin-packages');
+      final response = await dio.get('/api/payments/packages');
       if (response.statusCode == 200) {
         final List<dynamic> data = response.data;
         if (mounted) {
@@ -139,11 +140,13 @@ class _CoinRechargeScreenState extends State<CoinRechargeScreen> {
                 Expanded(
                   child: Row(
                     children: [
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF333333), size: 20),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                      const SizedBox(width: 8),
+                      if (!widget.isTab) ...[
+                        IconButton(
+                          icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF333333), size: 20),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
                       Expanded(
                         child: Text(
                           'Recharge Coins',
@@ -481,6 +484,8 @@ class _CheckoutSheetState extends State<_CheckoutSheet> with SingleTickerProvide
 
   late AnimationController _animController;
   late Animation<double> _scaleAnimation;
+  late Razorpay _razorpay;
+  String? _internalPaymentId;
 
   @override
   void initState() {
@@ -490,12 +495,100 @@ class _CheckoutSheetState extends State<_CheckoutSheet> with SingleTickerProvide
       duration: const Duration(milliseconds: 300),
     );
     _scaleAnimation = CurvedAnimation(parent: _animController, curve: Curves.bounceOut);
+
+    _razorpay = Razorpay();
+    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
+    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
+    _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _handleExternalWallet);
   }
 
   @override
   void dispose() {
+    _razorpay.clear();
     _animController.dispose();
     super.dispose();
+  }
+
+  void _handlePaymentSuccess(PaymentSuccessResponse response) async {
+    if (!mounted || _internalPaymentId == null) return;
+    
+    setState(() => _isProcessing = true);
+    try {
+      final token = context.read<AuthProvider>().accessToken;
+      if (token == null) throw Exception('Unauthenticated');
+
+      final dio = createApiDio(accessToken: token);
+      await dio.post(
+        '/api/payments/verify',
+        data: {
+          'paymentId': _internalPaymentId,
+          'razorpayOrderId': response.orderId,
+          'razorpayPaymentId': response.paymentId,
+          'razorpaySignature': response.signature,
+        },
+      );
+
+      final wallet = context.read<WalletProvider>();
+      await wallet.loadWallet();
+
+      if (!mounted) return;
+      setState(() {
+        _isProcessing = false;
+        _isSuccess = true;
+      });
+      _animController.forward();
+
+      await Future.delayed(const Duration(milliseconds: 1500));
+      if (!mounted) return;
+
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle, color: Colors.white),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Successfully added ${widget.package.coins} coins!'),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFF00A86B),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Recharge verification error: $e');
+      if (!mounted) return;
+      setState(() => _isProcessing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Verification failed. Contact support if deducted.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  void _handlePaymentError(PaymentFailureResponse response) {
+    if (!mounted) return;
+    setState(() => _isProcessing = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Payment failed: ${response.message ?? "Unknown Error"}'),
+        backgroundColor: Colors.red,
+      ),
+    );
+  }
+
+  void _handleExternalWallet(ExternalWalletResponse response) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('External wallet selected: ${response.walletName}'),
+        backgroundColor: Colors.blue,
+      ),
+    );
   }
 
   Future<void> _processPayment() async {
@@ -535,61 +628,38 @@ class _CheckoutSheetState extends State<_CheckoutSheet> with SingleTickerProvide
       );
 
       final orderData = orderRes.data as Map<String, dynamic>;
+      final razorpayOrder = orderData['razorpayOrder'] as Map<String, dynamic>?;
       final payment = orderData['payment'] as Map<String, dynamic>?;
-      final paymentId = payment?['id'] as String?;
 
-      if (paymentId == null || paymentId.isEmpty) {
-        throw Exception('Could not start payment');
+      _internalPaymentId = payment?['id'] as String?;
+
+      if (razorpayOrder == null || _internalPaymentId == null) {
+        throw Exception('Could not initialize Razorpay order');
       }
 
-      await dio.post(
-        '/api/payments/verify',
-        data: {
-          'paymentId': paymentId,
-          'transactionId': 'app_${DateTime.now().millisecondsSinceEpoch}',
+      final options = {
+        'key': razorpayOrder['keyId'],
+        'amount': razorpayOrder['amount'],
+        'name': 'Voice Calling App',
+        'description': '${widget.package.coins} Coins',
+        'order_id': razorpayOrder['id'],
+        'prefill': {
+          'contact': '',
+          'email': ''
         },
-      );
+        'theme': {
+          'color': '#FF1493'
+        }
+      };
 
-      final wallet = context.read<WalletProvider>();
-      await wallet.loadWallet();
-      final credited = wallet.balance;
-
-      if (!mounted) return;
-
-      setState(() {
-        _isProcessing = false;
-        _isSuccess = true;
-      });
-      _animController.forward();
-
-      await Future.delayed(const Duration(milliseconds: 1500));
-      if (!mounted) return;
-
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Successfully added ${widget.package.coins} coins! Balance: $credited',
-                ),
-              ),
-            ],
-          ),
-          backgroundColor: const Color(0xFF00A86B),
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      _razorpay.open(options);
     } catch (e) {
-      debugPrint('Recharge payment error: $e');
+      debugPrint('Create order error: $e');
       if (!mounted) return;
       setState(() => _isProcessing = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Payment failed. Please try again.'),
+        const SnackBar(
+          content: Text('Failed to start payment.'),
           backgroundColor: Colors.red,
         ),
       );

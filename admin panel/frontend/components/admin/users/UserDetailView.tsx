@@ -20,6 +20,10 @@ import {
   fetchAdminUserDetail,
   formatDate,
   formatDateTime,
+  blockUser,
+  unblockUser,
+  suspendUser,
+  reactivateUser,
 } from '../../../lib/adminUsers';
 import { API_BASE, connectionErrorMessage, classifyApiFailure } from '../../../lib/api';
 import LiveDataBanner from '../../LiveDataBanner';
@@ -35,6 +39,25 @@ export default function UserDetailView({ userId }: UserDetailViewProps) {
   const [loading, setLoading] = useState(true);
   const [isLive, setIsLive] = useState(false);
   const [loadError, setLoadError] = useState<string | undefined>();
+  const [updating, setUpdating] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const handleStatusAction = async (action: 'block' | 'unblock' | 'suspend' | 'reactivate') => {
+    setUpdating(true);
+    setActionError(null);
+    let res;
+    if (action === 'block') res = await blockUser(userId);
+    else if (action === 'unblock') res = await unblockUser(userId);
+    else if (action === 'suspend') res = await suspendUser(userId);
+    else if (action === 'reactivate') res = await reactivateUser(userId);
+
+    if (res && res.ok && res.data) {
+      setUser(res.data as AdminUserDetail);
+    } else {
+      setActionError((res?.data as any)?.message || 'Failed to update user status.');
+    }
+    setUpdating(false);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -139,10 +162,16 @@ export default function UserDetailView({ userId }: UserDetailViewProps) {
                   Creator
                 </Badge>
               )}
-              {user.blocked && (
+              {user.status === 'blocked' && (
                 <Badge variant="danger">
                   <ShieldOff size={11} className="inline mr-0.5" />
                   Blocked
+                </Badge>
+              )}
+              {user.status === 'suspended' && (
+                <Badge variant="danger">
+                  <ShieldOff size={11} className="inline mr-0.5" />
+                  Suspended
                 </Badge>
               )}
             </div>
@@ -240,10 +269,50 @@ export default function UserDetailView({ userId }: UserDetailViewProps) {
               value={user.isVerified ? 'Yes' : 'No'}
             />
             <DetailRow
-              label="Blocked"
-              value={user.blocked ? 'Yes' : 'No'}
+              label="Account Status"
+              value={user.status ? user.status.charAt(0).toUpperCase() + user.status.slice(1) : 'Active'}
             />
           </dl>
+          <div className="pt-4 border-t border-border/60 flex flex-wrap gap-2">
+            {user.status === 'blocked' ? (
+              <button
+                disabled={updating}
+                onClick={() => handleStatusAction('unblock')}
+                className="px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 text-xs font-semibold disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                Unblock Account
+              </button>
+            ) : (
+              <button
+                disabled={updating}
+                onClick={() => handleStatusAction('block')}
+                className="px-3 py-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 text-xs font-semibold disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                Block Account
+              </button>
+            )}
+
+            {user.status === 'suspended' ? (
+              <button
+                disabled={updating}
+                onClick={() => handleStatusAction('reactivate')}
+                className="px-3 py-1.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 text-xs font-semibold disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                Reactivate Account
+              </button>
+            ) : (
+              <button
+                disabled={updating}
+                onClick={() => handleStatusAction('suspend')}
+                className="px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 border border-amber-500/30 text-xs font-semibold disabled:opacity-50 transition-colors cursor-pointer"
+              >
+                Suspend Account
+              </button>
+            )}
+          </div>
+          {actionError && (
+            <p className="text-[11px] text-red-400 mt-2 font-medium">{actionError}</p>
+          )}
         </section>
       </div>
 

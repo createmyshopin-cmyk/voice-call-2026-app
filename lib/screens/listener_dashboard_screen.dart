@@ -16,7 +16,8 @@ import 'calling_screen.dart';
 import '../widgets/call_history_card.dart';
 
 class ListenerDashboardScreen extends StatefulWidget {
-  const ListenerDashboardScreen({super.key});
+  final bool isTab;
+  const ListenerDashboardScreen({super.key, this.isTab = false});
 
   @override
   State<ListenerDashboardScreen> createState() => _ListenerDashboardScreenState();
@@ -312,11 +313,13 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
           Expanded(
             child: Row(
               children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
-                  onPressed: () => Navigator.pop(context),
-                ),
-                const SizedBox(width: 4),
+                if (!widget.isTab) ...[
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                  const SizedBox(width: 4),
+                ],
                 Flexible(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1032,7 +1035,7 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
           return CallHistoryCard(
             call: call,
             currentUserId: userId,
-            isCreatorView: true,
+            isListenerView: true,
             onTap: () {
               Navigator.push(
                 context,
@@ -1041,7 +1044,7 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
                     call: call,
                     currentUserId: userId,
                     avatarUrl: avatar,
-                    isCreatorView: true,
+                    isListenerView: true,
                   ),
                 ),
               );

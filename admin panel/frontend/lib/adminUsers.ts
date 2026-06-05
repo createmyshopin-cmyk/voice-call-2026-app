@@ -15,7 +15,7 @@ export interface AdminUserListItem {
   totalMinutes: number;
   onlineStatus: OnlineStatus;
   onboardingCompleted: boolean;
-  accountStatus: 'active' | 'blocked';
+  accountStatus: 'active' | 'blocked' | 'suspended';
   createdAt: string;
 }
 
@@ -42,6 +42,7 @@ export interface AdminUserDetail {
   isCreator: boolean;
   isVerified: boolean;
   blocked: boolean;
+  status: 'active' | 'blocked' | 'suspended';
   accountCreatedAt: string;
   updatedAt: string | null;
   totalCalls: number;
@@ -74,6 +75,7 @@ export interface ListUsersParams {
   onboarding?: 'all' | 'completed' | 'not_completed';
   sortBy?: 'createdAt' | 'fullName' | 'coins' | 'totalCalls';
   sortOrder?: 'asc' | 'desc';
+  isCreator?: 'all' | 'listener' | 'non_listener';
 }
 
 export function buildUsersQuery(params: ListUsersParams): string {
@@ -88,6 +90,9 @@ export function buildUsersQuery(params: ListUsersParams): string {
   }
   if (params.sortBy) q.set('sortBy', params.sortBy);
   if (params.sortOrder) q.set('sortOrder', params.sortOrder);
+  if (params.isCreator && params.isCreator !== 'all') {
+    q.set('isCreator', params.isCreator);
+  }
   return q.toString();
 }
 
@@ -98,6 +103,22 @@ export async function fetchAdminUsers(params: ListUsersParams) {
 
 export async function fetchAdminUserDetail(id: string) {
   return fetchJsonAuth(`${API_BASE}/admin/users/${id}`);
+}
+
+export async function blockUser(id: string) {
+  return fetchJsonAuth(`${API_BASE}/admin/users/${id}/block`, { method: 'POST' });
+}
+
+export async function unblockUser(id: string) {
+  return fetchJsonAuth(`${API_BASE}/admin/users/${id}/unblock`, { method: 'POST' });
+}
+
+export async function suspendUser(id: string) {
+  return fetchJsonAuth(`${API_BASE}/admin/users/${id}/suspend`, { method: 'POST' });
+}
+
+export async function reactivateUser(id: string) {
+  return fetchJsonAuth(`${API_BASE}/admin/users/${id}/reactivate`, { method: 'POST' });
 }
 
 export const DEFAULT_AVATAR =

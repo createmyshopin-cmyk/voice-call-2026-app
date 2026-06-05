@@ -7,14 +7,14 @@ import '../models/call_history_item.dart';
 class CallHistoryCard extends StatelessWidget {
   final CallHistoryItem call;
   final String currentUserId;
-  final bool isCreatorView;
+  final bool isListenerView;
   final VoidCallback? onTap;
 
   const CallHistoryCard({
     super.key,
     required this.call,
     required this.currentUserId,
-    this.isCreatorView = false,
+    this.isListenerView = false,
     this.onTap,
   });
 
@@ -24,10 +24,10 @@ class CallHistoryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final partyLabel = isCreatorView ? 'User Name' : 'Creator Name';
+    final partyLabel = isListenerView ? 'User Name' : 'Listener Name';
     final partyValue = call.otherPartyName(currentUserId);
-    final amountLabel = isCreatorView ? 'Earnings' : 'Coins Used';
-    final amountValue = isCreatorView
+    final amountLabel = isListenerView ? 'Earnings' : 'Coins Used';
+    final amountValue = isListenerView
         ? '+${call.coinsDeducted}'
         : '${call.coinsDeducted}';
 
@@ -57,7 +57,7 @@ class CallHistoryCard extends StatelessWidget {
                     amountLabel,
                     amountValue,
                     valueColor:
-                        isCreatorView ? const Color(0xFF2ECC71) : _valueColor,
+                        isListenerView ? const Color(0xFF2ECC71) : _valueColor,
                   ),
                 ],
               ),
@@ -83,7 +83,7 @@ class CallHistoryCard extends StatelessWidget {
     await Clipboard.setData(
       ClipboardData(
         text: call.copyableSummary(
-          isCreatorView: isCreatorView,
+          isListenerView: isListenerView,
           currentUserId: currentUserId,
         ),
       ),

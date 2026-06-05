@@ -42,18 +42,21 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
       const activeRes = await fetch(`${API_BASE}/creators/active`, { headers: getHeaders() });
       const pendingRes = await fetch(`${API_BASE}/creators/pending`, { headers: getHeaders() });
       const suspendedRes = await fetch(`${API_BASE}/creators/suspended`, { headers: getHeaders() });
+      const rejectedRes = await fetch(`${API_BASE}/creators/rejected`, { headers: getHeaders() });
       const withdrawsRes = await fetch(`${API_BASE}/admin/withdrawals`, { headers: getHeaders() });
 
-      if (activeRes.ok && pendingRes.ok && suspendedRes.ok && withdrawsRes.ok) {
+      if (activeRes.ok && pendingRes.ok && suspendedRes.ok && rejectedRes.ok && withdrawsRes.ok) {
         const activeData = await activeRes.json();
         const pendingData = await pendingRes.json();
         const suspendedData = await suspendedRes.json();
+        const rejectedData = await rejectedRes.json();
         const withdrawsData = await withdrawsRes.json();
 
         const combinedCreators = [
           ...activeData.map((c: any) => ({ ...c, status: 'active' })),
           ...pendingData.map((c: any) => ({ ...c, status: 'pending' })),
-          ...suspendedData.map((c: any) => ({ ...c, status: 'suspended' }))
+          ...suspendedData.map((c: any) => ({ ...c, status: 'suspended' })),
+          ...rejectedData.map((c: any) => ({ ...c, status: 'rejected' }))
         ].map((c: any) => ({
           id: c.id,
           name: c.name || c.user?.name || 'Unknown Host',
@@ -307,6 +310,7 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
     if (activeSubTab === 'active') return matchesSearch && l.status === 'active';
     if (activeSubTab === 'pending') return matchesSearch && l.status === 'pending';
     if (activeSubTab === 'suspended') return matchesSearch && l.status === 'suspended';
+    if (activeSubTab === 'rejected') return matchesSearch && l.status === 'rejected';
     return matchesSearch; // for performance/earnings sub-tabs, show all
   });
 
@@ -336,6 +340,7 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
             { id: 'active', label: 'Active Listeners' },
             { id: 'pending', label: 'Pending Approval' },
             { id: 'suspended', label: 'Suspended' },
+            { id: 'rejected', label: 'Rejected Applications' },
             { id: 'withdrawals', label: 'Withdrawal Requests' },
             { id: 'performance', label: 'Performance Analytics' }
           ].map(tab => (
@@ -558,6 +563,55 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
           ) : (
             <div className="p-8 text-center text-zinc-500">
               No suspended listeners.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 3.1 Rejected Applications */}
+      {activeSubTab === 'rejected' && (
+        <div className="glass-panel rounded-2xl overflow-hidden">
+          {filteredListeners.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-zinc-800 text-zinc-400 bg-zinc-900/30">
+                    <th className="p-4 font-semibold">Listener</th>
+                    <th className="p-4 font-semibold">Contact</th>
+                    <th className="p-4 font-semibold">Join Date</th>
+                    <th className="p-4 font-semibold text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-900">
+                  {filteredListeners.map(host => (
+                    <tr key={host.id} className="hover:bg-zinc-900/30 text-zinc-300">
+                      <td className="p-4">
+                        <div className="flex items-center gap-3">
+                          <img src={host.image} alt={host.name} className="w-8 h-8 rounded-full object-cover border border-zinc-800" />
+                          <div>
+                            <span className="font-semibold text-white">{host.name}</span>
+                            <span className="block text-[10px] text-zinc-500 mt-0.5">{host.id}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <span className="block">{host.phone}</span>
+                        <span className="block text-[10px] text-zinc-500 mt-0.5">{host.email}</span>
+                      </td>
+                      <td className="p-4 text-zinc-500">{host.joinDate}</td>
+                      <td className="p-4 text-right">
+                        <span className="inline-flex px-2 py-0.5 bg-red-500/10 text-red-400 rounded text-[10px] font-bold">
+                          Rejected
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-8 text-center text-zinc-500">
+              No rejected applications.
             </div>
           )}
         </div>

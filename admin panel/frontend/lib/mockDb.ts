@@ -29,7 +29,7 @@ export interface Listener {
   languages: string[];
   gender: 'Male' | 'Female' | 'Other';
   experience: string;
-  status: 'pending' | 'active' | 'suspended';
+  status: 'pending' | 'active' | 'suspended' | 'rejected';
   rating: number;
   completedCalls: number;
   revenueGenerated: number; // in ₹

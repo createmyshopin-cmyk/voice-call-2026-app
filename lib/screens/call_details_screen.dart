@@ -6,14 +6,14 @@ class CallDetailsScreen extends StatelessWidget {
   final CallHistoryItem call;
   final String currentUserId;
   final String? avatarUrl;
-  final bool isCreatorView;
+  final bool isListenerView;
 
   const CallDetailsScreen({
     super.key,
     required this.call,
     required this.currentUserId,
     this.avatarUrl,
-    this.isCreatorView = false,
+    this.isListenerView = false,
   });
 
   @override
@@ -55,7 +55,7 @@ class CallDetailsScreen extends StatelessWidget {
           _detailTile(Icons.timer_outlined, 'Duration', call.formattedDuration()),
           _detailTile(
             Icons.monetization_on_outlined,
-            isCreatorView ? 'Coins earned' : 'Coins used',
+            isListenerView ? 'Coins earned' : 'Coins used',
             '${call.coinsDeducted}',
           ),
           const SizedBox(height: 16),
