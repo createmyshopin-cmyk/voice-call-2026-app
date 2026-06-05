@@ -26,9 +26,18 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentTabIndex = 0;
   String _selectedFilter = 'All';
+  int? _lastLoggedBalance;
 
   // Track Favourites locally
   final Set<String> _favouriteUsers = {};
+
+  void _logDisplayedBalance(WalletProvider coinProvider, String surface) {
+    if (_lastLoggedBalance == coinProvider.balance) return;
+    _lastLoggedBalance = coinProvider.balance;
+    debugPrint(
+      '[HomeScreen] $surface displayed balance=${coinProvider.balance}',
+    );
+  }
 
   @override
   void initState() {
@@ -36,7 +45,7 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
       if (auth.accessToken != null) {
-        context.read<WalletProvider>().loadWallet();
+        context.read<WalletProvider>().loadWallet(reason: 'homeInit');
         final cp = context.read<CreatorProvider>();
         if (cp.creators.isEmpty && !cp.isLoading) {
           cp.fetchCreators();
@@ -182,6 +191,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final coinProvider = context.watch<WalletProvider>();
     final authProvider = context.watch<AuthProvider>();
+    _logDisplayedBalance(coinProvider, 'build');
     final isListener = authProvider.isListener;
     final maxTabs = isListener ? 5 : 3;
     final activeIndex = _currentTabIndex.clamp(0, maxTabs - 1);
@@ -1034,7 +1044,11 @@ class _HomeScreenState extends State<HomeScreen> {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (context) => const CoinRechargeScreen()),
-              );
+              ).then((_) {
+                if (mounted) {
+                  context.read<WalletProvider>().loadWallet(reason: 'rechargePop');
+                }
+              });
             },
             child: Container(
               width: 110,

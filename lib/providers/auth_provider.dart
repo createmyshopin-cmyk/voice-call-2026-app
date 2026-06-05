@@ -197,6 +197,15 @@ class AuthProvider with ChangeNotifier {
     await fetchListenerProfile();
   }
 
+  /// Reload profile from API (includes users.coins for legacy surfaces).
+  /// Does not drive wallet UI — WalletProvider ignores auth refresh for balance.
+  Future<void> refreshUser() async {
+    await loadProfile();
+    debugPrint(
+      '[AuthProvider] refreshUser => users.coins=${_user?.coins}',
+    );
+  }
+
   /// Restores Firebase session from disk, then re-exchanges for API JWT on cold start.
   Future<void> _restoreSession() async {
     try {
@@ -441,6 +450,9 @@ class AuthProvider with ChangeNotifier {
 
     if (response.statusCode == 200) {
       _user = AppUser.fromJson(response.data as Map<String, dynamic>);
+      debugPrint(
+        '[AuthProvider] loadProfile => users.coins=${_user?.coins}',
+      );
       notifyListeners();
       await fetchListenerProfile();
     } else if (response.statusCode == 401) {

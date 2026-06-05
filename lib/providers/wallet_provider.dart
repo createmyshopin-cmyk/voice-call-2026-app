@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import '../services/api_config.dart';
@@ -7,6 +7,8 @@ class WalletProvider with ChangeNotifier {
   int _balance = 0;
   String? _userId;
   String? _accessToken;
+  /// Tracks the user we last seeded for — only reseed on login / user switch.
+  String? _currentUserId;
 
   final Dio _dio = Dio(BaseOptions(
     baseUrl: apiBaseUrl,
@@ -18,28 +20,59 @@ class WalletProvider with ChangeNotifier {
   String? get userId => _userId;
   String? get accessToken => _accessToken;
 
+  void _writeBalance(String source, int value) {
+    debugPrint(
+      '[WalletProvider] $source => balance $_balance -> $value',
+    );
+    _balance = value;
+    notifyListeners();
+  }
+
   void updateAuth(String? userId, String? accessToken, {int? initialCoins}) {
+    debugPrint(
+      '[WalletProvider] updateAuth userId=$userId '
+      'initialCoins=$initialCoins currentUserId=$_currentUserId '
+      'currentBalance=$_balance',
+    );
+
+    if (userId == null || accessToken == null) {
+      _userId = null;
+      _accessToken = null;
+      _currentUserId = null;
+      _writeBalance('updateAuth:logout', 0);
+      return;
+    }
+
+    final userChanged = _currentUserId != userId;
+    final tokenChanged = _accessToken != accessToken;
+
     _userId = userId;
     _accessToken = accessToken;
-    if (_userId != null && _accessToken != null) {
-      if (initialCoins != null) {
-        _balance = initialCoins;
-        notifyListeners();
-      }
-      loadWallet();
-    } else {
-      _balance = 0;
-      notifyListeners();
+
+    if (userChanged) {
+      _currentUserId = userId;
+      _writeBalance('updateAuth:userChanged', initialCoins ?? 0);
+      loadWallet(reason: 'login');
+      return;
     }
+
+    if (tokenChanged) {
+      loadWallet(reason: 'tokenRefresh');
+      return;
+    }
+
+    debugPrint(
+      '[WalletProvider] updateAuth skipped balance reload '
+      '(auth profile refresh only — wallet balance preserved)',
+    );
   }
 
   /// Sync balance from profile without a network round-trip.
   void setBalance(int coins) {
-    _balance = coins;
-    notifyListeners();
+    _writeBalance('setBalance', coins);
   }
 
-  Future<void> loadWallet() async {
+  Future<void> loadWallet({String reason = 'manual'}) async {
     if (_accessToken == null) return;
     try {
       final response = await _dio.get(
@@ -51,22 +84,25 @@ class WalletProvider with ChangeNotifier {
         ),
       );
       if (response.statusCode == 200) {
-        // Response is { userId: String, name: String, coins: int }
-        final data = response.data;
-        _balance = data['coins'] as int? ?? 0;
-        debugPrint("Coin balance loaded from backend: $_balance");
-        notifyListeners();
+        final data = response.data as Map<String, dynamic>;
+        final serverBalance = (data['coins'] as num?)?.toInt() ??
+            (data['coin_balance'] as num?)?.toInt() ??
+            0;
+        debugPrint(
+          '[WalletProvider] loadWallet:$reason => server balance=$serverBalance '
+          'raw=$data',
+        );
+        _writeBalance('loadWallet:$reason', serverBalance);
       }
     } catch (e) {
-      debugPrint("Load wallet error: $e");
+      debugPrint('[WalletProvider] loadWallet:$reason error: $e');
     }
   }
 
   Future<bool> deductCoins(int amount, {bool localOnly = false}) async {
     if (_balance < amount) return false;
     if (localOnly || _userId == null) {
-      _balance -= amount;
-      notifyListeners();
+      _writeBalance('deductCoins:local', _balance - amount);
       return true;
     }
     try {
@@ -79,14 +115,12 @@ class WalletProvider with ChangeNotifier {
         },
       );
       if (response.statusCode == 200 || response.statusCode == 201) {
-        await loadWallet();
+        await loadWallet(reason: 'deductCoins');
         return true;
       }
     } catch (e) {
-      debugPrint("Backend coin deduction error: $e");
-      // Fallback to local update
-      _balance -= amount;
-      notifyListeners();
+      debugPrint('Backend coin deduction error: $e');
+      _writeBalance('deductCoins:fallback', _balance - amount);
       return true;
     }
     return false;
@@ -94,8 +128,7 @@ class WalletProvider with ChangeNotifier {
 
   Future<void> addCoins(int amount) async {
     if (_userId == null) {
-      _balance += amount;
-      notifyListeners();
+      _writeBalance('addCoins:local', _balance + amount);
       return;
     }
     try {
@@ -108,20 +141,16 @@ class WalletProvider with ChangeNotifier {
         },
       );
       if (response.statusCode == 200 || response.statusCode == 201) {
-        await loadWallet();
+        await loadWallet(reason: 'addCoins');
       }
     } catch (e) {
-      debugPrint("Backend coin adjust error: $e");
-      // Fallback to local update
-      _balance += amount;
-      notifyListeners();
+      debugPrint('Backend coin adjust error: $e');
+      _writeBalance('addCoins:fallback', _balance + amount);
     }
   }
 
-  /// Called after a call ends with the server-returned balance.
-  /// Avoids an extra network round-trip for wallet refresh.
+  /// Authoritative balance from verify RPC or end-call response.
   void setBalanceFromServer(int newBalance) {
-    _balance = newBalance;
-    notifyListeners();
+    _writeBalance('setBalanceFromServer', newBalance);
   }
 }

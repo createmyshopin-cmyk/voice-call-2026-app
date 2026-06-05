@@ -11,8 +11,11 @@ String get apiBaseUrl {
   const envUrl = String.fromEnvironment('API_BASE_URL');
   if (envUrl.isNotEmpty) return envUrl;
 
-  // Local backend only in debug (emulator / desktop).
-  if (kDebugMode) {
+  // Local backend only when explicitly requested (emulator).
+  // Physical devices cannot reach 10.0.2.2 — default to production Railway API.
+  const useLocalApi =
+      const bool.fromEnvironment('USE_LOCAL_API', defaultValue: false);
+  if (kDebugMode && useLocalApi) {
     if (kIsWeb) return 'http://localhost:5000';
     if (Platform.isAndroid) return 'http://10.0.2.2:5000';
     return 'http://localhost:5000';

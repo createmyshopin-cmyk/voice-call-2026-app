@@ -26,7 +26,8 @@ void main() async {
         // 1. Auth is the root — everything depends on it
         ChangeNotifierProvider(create: (_) => AuthProvider()),
 
-        // 2. Wallet reacts to auth changes
+        // 2. Wallet reacts to auth login/logout only — not profile refresh.
+        // initialCoins seeds balance once per user id; never on every notifyListeners.
         ChangeNotifierProxyProvider<AuthProvider, WalletProvider>(
           create: (_) => WalletProvider(),
           update: (_, auth, wallet) => wallet!
