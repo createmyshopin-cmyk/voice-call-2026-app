@@ -79,6 +79,35 @@ class CallHistoryItem {
     return '$minutes min ${seconds}s';
   }
 
+  /// Compact duration for call list rows — e.g. `12m 45s`.
+  String formattedDurationCompact() {
+    if (durationSeconds <= 0) return '—';
+    final minutes = durationSeconds ~/ 60;
+    final seconds = durationSeconds % 60;
+    if (minutes == 0) return '${seconds}s';
+    if (seconds == 0) return '${minutes}m';
+    return '${minutes}m ${seconds}s';
+  }
+
+  /// Subtitle timestamp — e.g. `Today, 09:32 PM`.
+  String formattedCallSubtitle() {
+    final now = DateTime.now();
+    final started = startedAt.toLocal();
+    String dayLabel;
+    if (started.year == now.year &&
+        started.month == now.month &&
+        started.day == now.day) {
+      dayLabel = 'Today';
+    } else if (started.year == now.year &&
+        started.month == now.month &&
+        started.day == now.day - 1) {
+      dayLabel = 'Yesterday';
+    } else {
+      dayLabel = DateFormat('MMM d').format(started);
+    }
+    return '$dayLabel, ${DateFormat('hh:mm a').format(started)}';
+  }
+
   String relativeEndTime() {
     final ref = endedAt ?? startedAt;
     final diff = DateTime.now().difference(ref);

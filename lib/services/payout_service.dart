@@ -1,5 +1,5 @@
 import 'package:dio/dio.dart';
-import 'api_config.dart';
+import 'api_client.dart';
 
 class CreatorWithdrawal {
   final String id;
@@ -65,13 +65,7 @@ class CreatorWalletBalance {
 class PayoutService {
   final Dio _dio;
 
-  PayoutService({Dio? dio})
-      : _dio = dio ??
-            Dio(BaseOptions(
-              baseUrl: apiBaseUrl,
-              connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 10),
-            ));
+  PayoutService({Dio? dio}) : _dio = dio ?? apiDio;
 
   Map<String, String> _authHeaders(String accessToken) => {
         'Authorization': 'Bearer $accessToken',

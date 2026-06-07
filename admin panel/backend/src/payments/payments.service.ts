@@ -10,8 +10,7 @@ import { CoinTransactionsService } from '../calls/coin-transactions.service';
 import { SupabaseService } from '../supabase/supabase.service';
 import { CreatePackageDto, UpdatePackageDto, VerifyPaymentDto } from './dto/payment.dto';
 import * as crypto from 'crypto';
-// Razorpay ships its own type declarations inside the package
-import Razorpay from 'razorpay';
+import { createRazorpayClient, RazorpayInstance } from './razorpay-client';
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -94,7 +93,7 @@ function rowToPayment(row: Record<string, unknown>, userName = 'Unknown'): Payme
 @Injectable()
 export class PaymentsService {
   /** Lazy-initialised Razorpay client — created only when real keys are present */
-  private razorpay: Razorpay | null = null;
+  private razorpay: RazorpayInstance | null = null;
 
   /** In-memory fallback collections (used when Supabase is not configured) */
   private memPackages: CoinPackage[]    = [...SEED_PACKAGES];
@@ -113,7 +112,7 @@ export class PaymentsService {
     const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
 
     if (keyId && keySecret && !keyId.startsWith('rzp_test_mock')) {
-      this.razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
+      this.razorpay = createRazorpayClient({ key_id: keyId, key_secret: keySecret });
     }
   }
 

@@ -2,16 +2,27 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
+import 'core/network/api_diagnostics.dart';
+import 'core/network/network_service.dart';
+import 'services/api_client.dart';
+import 'services/realtime_listener_status_service.dart';
+import 'services/supabase_config.dart';
+import 'widgets/app_lifecycle_handler.dart';
 import 'providers/auth_provider.dart';
 import 'providers/wallet_provider.dart';
 import 'providers/creator_provider.dart';
 import 'providers/creator_heartbeat_provider.dart';
 import 'providers/call_history_provider.dart';
+import 'providers/network_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/create_profile_screen.dart';
 import 'firebase_options.dart';
 import 'services/fcm_service.dart';
+import 'widgets/common/app_shimmer.dart';
+import 'widgets/network/network_gate.dart';
+
+late final NetworkService networkService;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,9 +31,20 @@ void main() async {
   );
   // Must be registered before runApp so the isolate is ready for background messages
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+  networkService = NetworkService();
+  final networkProvider = NetworkProvider(networkService);
+  await networkProvider.initialize();
+
+  bindApiDiagnosticsConnectionType(() => networkService.connectionType);
+  await logApiStartupDiagnostics(networkService: networkService);
+  await SupabaseConfig.initialize();
+
   runApp(
     MultiProvider(
       providers: [
+        ChangeNotifierProvider<NetworkProvider>.value(value: networkProvider),
+
         // 1. Auth is the root — everything depends on it
         ChangeNotifierProvider(create: (_) => AuthProvider()),
 
@@ -40,7 +62,11 @@ void main() async {
 
         // 3. Creators list reacts to auth changes (re-fetch on login)
         ChangeNotifierProxyProvider<AuthProvider, CreatorProvider>(
-          create: (_) => CreatorProvider(),
+          create: (_) => CreatorProvider(
+            realtimeService: RealtimeListenerStatusService(
+              networkService: networkService,
+            ),
+          ),
           update: (_, auth, creators) =>
               creators!..onAuthChanged(auth.accessToken),
         ),
@@ -58,7 +84,7 @@ void main() async {
               history!..onAuthChanged(auth.accessToken),
         ),
       ],
-      child: const MyApp(),
+      child: const AppLifecycleHandler(child: MyApp()),
     ),
   );
 }
@@ -75,12 +101,13 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.blue,
         useMaterial3: true,
       ),
+      builder: (context, child) {
+        return NetworkGate(child: child ?? const SizedBox.shrink());
+      },
       home: Consumer<AuthProvider>(
         builder: (context, auth, _) {
           if (auth.isInitializing) {
-            return const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            );
+            return const AuthInitSkeleton();
           }
           if (auth.isAuthenticated &&
               (auth.user?.onboardingCompleted ?? false)) {

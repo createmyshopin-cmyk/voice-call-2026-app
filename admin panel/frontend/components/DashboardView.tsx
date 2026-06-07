@@ -32,9 +32,22 @@ export default function DashboardView({ onNavigate }: DashboardViewProps) {
   const [isLive, setIsLive] = useState(false);
   const [loadError, setLoadError] = useState<string | undefined>();
 
+  const resolveHostName = (c: Record<string, unknown>) => {
+    const user = c.user as { full_name?: string; fullName?: string; name?: string } | undefined;
+    return String(
+      c.fullName ||
+        c.full_name ||
+        c.name ||
+        user?.full_name ||
+        user?.fullName ||
+        user?.name ||
+        'Unknown Host',
+    );
+  };
+
   const mapCreator = (c: Record<string, unknown>, status: string): Listener => ({
     id: String(c.id),
-    name: String(c.name || (c.user as { name?: string })?.name || 'Unknown Host'),
+    name: resolveHostName(c),
     image: String(
       c.profile_image ||
         c.profileImage ||
@@ -114,7 +127,7 @@ export default function DashboardView({ onNavigate }: DashboardViewProps) {
       setUsers(
         usersData.map((u: Record<string, unknown>) => ({
           id: String(u.id),
-          name: String(u.name || 'Unknown User'),
+          name: String(u.fullName || u.full_name || u.name || 'Unknown User'),
           image: String(
             u.profile_image || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
           ),

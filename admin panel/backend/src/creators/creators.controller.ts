@@ -73,9 +73,25 @@ export class CreatorsController {
     return this.creatorsService.getRejected();
   }
 
+  @Post('online')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Creator goes online (broadcasts via Supabase Realtime)' })
+  @ApiResponse({ status: 200, description: 'is_online set to true.' })
+  setOnline(@Request() req: { user: { id: string } }) {
+    return this.creatorsService.setOnline(req.user.id);
+  }
+
+  @Post('offline')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Creator goes offline (broadcasts via Supabase Realtime)' })
+  @ApiResponse({ status: 200, description: 'is_online set to false.' })
+  setOffline(@Request() req: { user: { id: string } }) {
+    return this.creatorsService.setOffline(req.user.id);
+  }
+
   @Post('heartbeat')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Creator presence heartbeat' })
+  @ApiOperation({ summary: 'Creator presence heartbeat (last_seen while online)' })
   @ApiResponse({ status: 200, description: 'last_seen_at updated.' })
   @ApiResponse({ status: 401, description: 'Unauthorized.' })
   @ApiResponse({ status: 403, description: 'User is not a creator.' })

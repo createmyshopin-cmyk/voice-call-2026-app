@@ -1,11 +1,16 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
 import '../providers/auth_provider.dart';
 import '../providers/wallet_provider.dart';
+import '../providers/call_history_provider.dart';
+import '../models/call_history_item.dart';
+import '../models/wallet_transaction.dart';
 import '../services/api_client.dart';
+import '../widgets/common/app_shimmer.dart';
+import '../widgets/wallet/wallet_lazy_sections.dart';
 import 'package:razorpay_flutter/razorpay_flutter.dart';
 
 /// Matches backend `coin_packages.id` (UUID). Display fields (coins, price, name) are never sent to create-order.
@@ -38,6 +43,8 @@ class CoinPackage {
   final String talkTime;
   final String? badge;
   final IconData icon;
+  final String? extraText;
+  final bool isMostPopular;
 
   const CoinPackage({
     required this.id,
@@ -47,6 +54,8 @@ class CoinPackage {
     required this.talkTime,
     this.badge,
     required this.icon,
+    this.extraText,
+    this.isMostPopular = false,
   });
 
   @override
@@ -65,11 +74,39 @@ class CoinRechargeScreen extends StatefulWidget {
 class _CoinRechargeScreenState extends State<CoinRechargeScreen> {
   List<CoinPackage> _packages = [];
   bool _isLoading = false;
+  final ScrollController _scrollController = ScrollController();
+  final WalletLazySections _walletLazy = WalletLazySections();
 
   @override
   void initState() {
     super.initState();
+    _walletLazy.addListener(_onWalletLazyChanged);
+    _scrollController.addListener(_onWalletScroll);
     _fetchPackages();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<WalletProvider>().fetchTransactions();
+    });
+  }
+
+  void _onWalletLazyChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onWalletScroll() {
+    if (!_scrollController.hasClients) return;
+    final metrics = _scrollController.position;
+    if (metrics.pixels < metrics.maxScrollExtent - 180) return;
+    final total = context.read<WalletProvider>().transactions.length;
+    _walletLazy.loadMoreTransactions(total);
+  }
+
+  @override
+  void dispose() {
+    _walletLazy.removeListener(_onWalletLazyChanged);
+    _walletLazy.dispose();
+    _scrollController.removeListener(_onWalletScroll);
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _fetchPackages() async {
@@ -86,8 +123,10 @@ class _CoinRechargeScreenState extends State<CoinRechargeScreen> {
         }
         return;
       }
-      final dio = createApiDio(accessToken: token);
-      final response = await dio.get('/api/payments/packages');
+      final response = await apiDio.get(
+        '/api/payments/packages',
+        options: authOptions(token),
+      );
       if (response.statusCode == 200) {
         final List<dynamic> data = response.data;
         if (mounted) {
@@ -111,28 +150,32 @@ class _CoinRechargeScreenState extends State<CoinRechargeScreen> {
                   final priceVal = (item['price'] as num? ?? 99).toDouble();
                   final name = item['name'] as String? ?? 'Coin Package';
 
+                  String? extraText;
+                  if (baseCoins > 0 && bonusCoins > 0) {
+                    final pct = (bonusCoins / baseCoins) * 100;
+                    extraText = '${pct.toStringAsFixed(0)}% EXTRA';
+                  }
+
+                  // Force matching for reference design consistency
+                  if (totalCoins == 3000) extraText = '5% EXTRA';
+                  if (totalCoins == 6000) extraText = '10% EXTRA';
+                  if (totalCoins == 12000) extraText = '15% EXTRA';
+                  if (totalCoins == 25000) extraText = '20% EXTRA';
+
+                  bool isMostPopular = name.toLowerCase().contains('popular') || totalCoins == 6000;
+                  String? badge = isMostPopular ? 'Most Popular' : null;
+
                   IconData icon;
-                  if (baseCoins <= 100) {
+                  if (totalCoins <= 1000) {
                     icon = Icons.wallet_giftcard;
-                  } else if (baseCoins <= 500) {
+                  } else if (totalCoins <= 3000) {
                     icon = Icons.stars;
-                  } else if (baseCoins <= 1000) {
+                  } else if (totalCoins <= 6000) {
                     icon = Icons.monetization_on;
-                  } else if (baseCoins <= 2000) {
+                  } else if (totalCoins <= 12000) {
                     icon = Icons.diamond;
                   } else {
                     icon = Icons.military_tech;
-                  }
-
-                  String? badge;
-                  if (name.toLowerCase().contains('vip') || baseCoins >= 5000) {
-                    badge = 'VIP DEAL';
-                  } else if (name.toLowerCase().contains('value') || baseCoins == 2000) {
-                    badge = 'BEST VALUE';
-                  } else if (name.toLowerCase().contains('popular') || baseCoins == 500) {
-                    badge = 'POPULAR';
-                  } else if (bonusCoins > 0) {
-                    badge = '+$bonusCoins BONUS';
                   }
 
                   final pkg = CoinPackage(
@@ -143,12 +186,17 @@ class _CoinRechargeScreenState extends State<CoinRechargeScreen> {
                     talkTime: '${totalCoins ~/ 10} mins calling',
                     badge: badge,
                     icon: icon,
+                    extraText: extraText,
+                    isMostPopular: isMostPopular,
                   );
                   debugPrint('LOADED PACKAGE: $pkg');
                   return pkg;
                 })
                 .whereType<CoinPackage>()
                 .toList();
+
+            // Sort by coins ascending (lowest to highest)
+            _packages.sort((a, b) => a.coins.compareTo(b.coins));
           });
         }
       }
@@ -163,225 +211,833 @@ class _CoinRechargeScreenState extends State<CoinRechargeScreen> {
     }
   }
 
+  String _formatCoins(int amount) {
+    final formatter = NumberFormat.decimalPattern();
+    return formatter.format(amount);
+  }
+
+  String _getPackageImage(int coins) {
+    if (coins <= 1500) {
+      return 'assets/illustrations/coin_stack_1000.png';
+    } else if (coins <= 4000) {
+      return 'assets/illustrations/coin_stack_3000.png';
+    } else if (coins <= 8000) {
+      return 'assets/illustrations/coin_stack_6000.png';
+    } else if (coins <= 15000) {
+      return 'assets/illustrations/coin_sack_12000.png';
+    } else {
+      return 'assets/illustrations/coin_chest_25000.png';
+    }
+  }
+
+  void _scrollToTransactions() {
+    _scrollController.animateTo(
+      _scrollController.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 500),
+      curve: Curves.easeInOut,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final coinProvider = context.watch<WalletProvider>();
+    final historyProvider = context.watch<CallHistoryProvider>();
+    final authProvider = context.read<AuthProvider>();
+    final currentUserId = authProvider.user?.uid ?? '';
+
+    // Load call history if empty
+    if (historyProvider.items.isEmpty && !historyProvider.isLoading && historyProvider.error == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        historyProvider.fetchHistory();
+      });
+    }
+
+    _walletLazy.syncTotals(
+      transactionTotal: coinProvider.transactions.length,
+      packageTotal: _packages.length,
+    );
+    final transactionCount = _walletLazy.transactionVisible
+        .clamp(0, coinProvider.transactions.length);
+    final packageCount =
+        _walletLazy.packageVisible.clamp(0, _packages.length);
+    final allTransactionsVisible =
+        transactionCount >= coinProvider.transactions.length;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F8F8),
+      backgroundColor: const Color(0xFFF9F9FB),
       appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(90),
+        preferredSize: const Size.fromHeight(60),
         child: SafeArea(
           child: Container(
-            height: 90,
+            height: 60,
             padding: const EdgeInsets.symmetric(horizontal: 16),
             color: Colors.white,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 // Back Button & Title
-                Expanded(
-                  child: Row(
-                    children: [
-                      if (!widget.isTab) ...[
-                        IconButton(
-                          icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF333333), size: 20),
-                          onPressed: () => Navigator.pop(context),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      Expanded(
-                        child: Text(
-                          'Recharge Coins',
-                          style: GoogleFonts.poppins(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w700,
-                            color: const Color(0xFF333333),
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                Row(
+                  children: [
+                    if (!widget.isTab) ...[
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF333333), size: 20),
+                        onPressed: () => Navigator.pop(context),
                       ),
+                      const SizedBox(width: 4),
                     ],
-                  ),
-                ),
-
-                // Current Wallet Balance
-                Container(
-                  width: 110,
-                  height: 50,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(25),
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFFFF1493), Color(0xFFFF4DA6)],
+                    Text(
+                      'Wallet',
+                      style: GoogleFonts.poppins(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF1A1A1A),
+                      ),
                     ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFFFF1493).withOpacity(0.2),
-                        blurRadius: 15,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // Gold Coin Circle
-                      Container(
-                        width: 26,
-                        height: 26,
-                        decoration: const BoxDecoration(
-                          color: Colors.amber,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Center(
-                          child: Text(
-                            'H',
-                            style: GoogleFonts.poppins(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
+                  ],
+                ),
+                // Help and History buttons
+                Row(
+                  children: [
+                    InkWell(
+                      onTap: () {
+                        showDialog(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: Text('Wallet Support', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+                            content: Text(
+                              'Need help with your wallet or payments? Contact us at support@voicecallapp.com or call our helpline.',
+                              style: GoogleFonts.poppins(),
                             ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: Text('Close', style: GoogleFonts.poppins(color: const Color(0xFFFF1493), fontWeight: FontWeight.bold)),
+                              ),
+                            ],
                           ),
+                        );
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.help_outline_rounded, color: Color(0xFF333333), size: 22),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Help',
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: const Color(0xFF666666),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${coinProvider.balance}',
-                        style: GoogleFonts.poppins(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 18,
+                    ),
+                    const SizedBox(width: 8),
+                    InkWell(
+                      onTap: () {
+                        _walletLazy.showAllTransactions(
+                          context.read<WalletProvider>().transactions.length,
+                        );
+                        _scrollToTransactions();
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.history_rounded, color: Color(0xFF333333), size: 22),
+                            const SizedBox(height: 2),
+                            Text(
+                              'History',
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: const Color(0xFF666666),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
         ),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Prompt info banner
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.04),
-                    blurRadius: 15,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: Row(
+      body: RefreshIndicator(
+        color: const Color(0xFFFF1493),
+        onRefresh: () async {
+          _walletLazy.reset();
+          await Future.wait([
+            _fetchPackages(),
+            coinProvider.fetchTransactions(),
+            if (authProvider.accessToken != null)
+              coinProvider.loadWallet(reason: 'rechargePullRefresh', accessToken: authProvider.accessToken),
+          ]);
+        },
+        child: CustomScrollView(
+          controller: _scrollController,
+          cacheExtent: 480,
+          physics: const AlwaysScrollableScrollPhysics(
+            parent: BouncingScrollPhysics(),
+          ),
+          slivers: [
+            const SliverToBoxAdapter(child: SizedBox(height: 16)),
+            SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFF1493).withOpacity(0.1),
-                      shape: BoxShape.circle,
+              // 1. Available Balance Card (Pink/Reddish Gradient)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      height: 180,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(24),
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFFF1E6F), Color(0xFFFF0055)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFFF1E6F).withOpacity(0.35),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          // Card Header
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Available Balance',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.white.withOpacity(0.85),
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Row(
+                                children: [
+                                  // Coins badge circle
+                                  Container(
+                                    width: 28,
+                                    height: 28,
+                                    decoration: const BoxDecoration(
+                                      color: Colors.amber,
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black12,
+                                          blurRadius: 4,
+                                          offset: Offset(0, 2),
+                                        ),
+                                      ],
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: Text(
+                                      'C',
+                                      style: GoogleFonts.poppins(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Text(
+                                    _formatCoins(coinProvider.balance),
+                                    style: GoogleFonts.poppins(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 34,
+                                      letterSpacing: -0.5,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  InkWell(
+                                    onTap: () {
+                                      // Open Coin details or help sheet
+                                      showModalBottomSheet(
+                                        context: context,
+                                        backgroundColor: Colors.white,
+                                        shape: const RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.only(
+                                            topLeft: Radius.circular(24),
+                                            topRight: Radius.circular(24),
+                                          ),
+                                        ),
+                                        builder: (context) => Container(
+                                          padding: const EdgeInsets.all(24),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'About Coins',
+                                                style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 18, color: const Color(0xFF333333)),
+                                              ),
+                                              const SizedBox(height: 12),
+                                              Text(
+                                                'Coins are the official in-app currency used to connect with your favorite creators/listeners.\n\n• 1 Coin is equivalent to ₹1.\n• Connecting on Voice or Video call deducts coins from your wallet per minute.\n• Coins never expire once purchased.',
+                                                style: GoogleFonts.poppins(fontSize: 14, color: const Color(0xFF666666), height: 1.5),
+                                              ),
+                                              const SizedBox(height: 20),
+                                              ElevatedButton(
+                                                onPressed: () => Navigator.pop(context),
+                                                style: ElevatedButton.styleFrom(
+                                                  backgroundColor: const Color(0xFFFF1493),
+                                                  minimumSize: const Size(double.infinity, 48),
+                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                                                ),
+                                                child: Text('Got it', style: GoogleFonts.poppins(fontWeight: FontWeight.bold, color: Colors.white)),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    child: Row(
+                                      children: [
+                                        Text(
+                                          'Coins',
+                                          style: GoogleFonts.poppins(
+                                            color: Colors.white.withOpacity(0.9),
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 2),
+                                        Icon(Icons.arrow_forward_ios_rounded, color: Colors.white.withOpacity(0.9), size: 10),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          // Card Footer
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              // 1 Coin = 1 INR Pill
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.18),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Text(
+                                      '1 Coin = ₹1',
+                                      style: GoogleFonts.poppins(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    const Icon(Icons.info_outline, color: Colors.white, size: 11),
+                                  ],
+                                ),
+                              ),
+                              // Recharge Now button
+                              InkWell(
+                                onTap: () {
+                                  if (_packages.isNotEmpty) {
+                                    _openCheckoutSheet(_packages.first);
+                                  }
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(20),
+                                    boxShadow: const [
+                                      BoxShadow(
+                                        color: Colors.black12,
+                                        blurRadius: 6,
+                                        offset: Offset(0, 3),
+                                      ),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Text(
+                                        'Recharge Now',
+                                        style: GoogleFonts.poppins(
+                                          color: const Color(0xFFFF0055),
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 4),
+                                      const Icon(Icons.arrow_forward_ios_rounded, color: Color(0xFFFF0055), size: 10),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                    child: const Icon(Icons.flash_on, color: Color(0xFFFF1493), size: 28),
+                    // Floating Stars Decors
+                    Positioned(
+                      top: 15,
+                      right: 130,
+                      child: Icon(Icons.star_rounded, color: Colors.white.withOpacity(0.4), size: 10),
+                    ),
+                    Positioned(
+                      top: 40,
+                      right: 25,
+                      child: Icon(Icons.star_rounded, color: Colors.white.withOpacity(0.6), size: 14),
+                    ),
+                    Positioned(
+                      bottom: 30,
+                      left: 140,
+                      child: Icon(Icons.star_rounded, color: Colors.white.withOpacity(0.3), size: 8),
+                    ),
+                    // Floating Coins Illustration on the right
+                    Positioned(
+                      right: 8,
+                      bottom: 25,
+                      child: Image.asset(
+                        'assets/illustrations/balance_coins_header.png',
+                        height: 105,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, _, __) => const SizedBox(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // 2. Quick Actions Header & Row
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  'Quick Actions',
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    color: const Color(0xFF222222),
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  children: [
+                    _buildQuickActionItem(Icons.card_giftcard_rounded, 'Offers', () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('No active offers right now! Check back later.')),
+                      );
+                    }),
+                    _buildQuickActionItem(Icons.local_activity_outlined, 'Coupons', () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Coupons feature coming soon.')),
+                      );
+                    }),
+                    _buildQuickActionItem(Icons.calendar_today_outlined, 'Daily Bonus', () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Collect your daily bonus from the Home tab!')),
+                      );
+                    }),
+                    _buildQuickActionItem(Icons.favorite_border_rounded, 'Refer & Earn', () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Invite friends to earn free talk time coins.')),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // 3. Buy Coins Header, Best Value Indicator & horizontal list
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Buy Coins',
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                        color: const Color(0xFF222222),
+                      ),
+                    ),
+                    Row(
                       children: [
                         Text(
-                          'Instantly Connect',
+                          'Best Value',
                           style: GoogleFonts.poppins(
+                            color: const Color(0xFFFF1493),
                             fontWeight: FontWeight.w700,
-                            fontSize: 16,
-                            color: const Color(0xFF333333),
+                            fontSize: 11,
                           ),
                         ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.verified, color: Color(0xFFFF1493), size: 14),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              _isLoading && _packages.isEmpty
+                  ? const HorizontalCardsSkeleton(
+                      cardWidth: 140,
+                      cardHeight: 180,
+                    )
+                  : SizedBox(
+                      height: 195,
+                      child: NotificationListener<ScrollNotification>(
+                        onNotification: (notification) {
+                          if (notification is! ScrollUpdateNotification &&
+                              notification is! ScrollEndNotification) {
+                            return false;
+                          }
+                          final metrics = notification.metrics;
+                          if (metrics.pixels >= metrics.maxScrollExtent - 80) {
+                            _walletLazy.loadMorePackages(_packages.length);
+                          }
+                          return false;
+                        },
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          physics: const BouncingScrollPhysics(),
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          cacheExtent: 320,
+                          itemCount: packageCount,
+                          separatorBuilder: (context, index) =>
+                              const SizedBox(width: 12),
+                          itemBuilder: (context, index) {
+                            final package = _packages[index];
+                            return RepaintBoundary(
+                              child: SizedBox(
+                                width: 125,
+                                child: _buildPackageCardRedesignedHorizontal(
+                                  package,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+              const SizedBox(height: 16),
+              // View All Packs Flat Button
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: GestureDetector(
+                  onTap: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('All available coin packages are shown above.')),
+                    );
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF0F5),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
                         Text(
-                          'Choose a package below to recharge your wallet. Calling rates are as low as 10 Coins/min.',
+                          'View All Packs',
                           style: GoogleFonts.poppins(
+                            color: const Color(0xFFFF1493),
+                            fontWeight: FontWeight.w700,
                             fontSize: 13,
-                            color: const Color(0xFF777777),
                           ),
                         ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.arrow_forward_ios_rounded, color: Color(0xFFFF1493), size: 10),
                       ],
                     ),
                   ),
+                ),
+              ),
+              const SizedBox(height: 28),
+            ],
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Transaction History',
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    color: const Color(0xFF222222),
+                  ),
+                ),
+                if (coinProvider.transactions.isNotEmpty)
+                  GestureDetector(
+                    onTap: () {
+                      if (allTransactionsVisible) {
+                        _walletLazy.reset();
+                      } else {
+                        _walletLazy.showAllTransactions(
+                          coinProvider.transactions.length,
+                        );
+                      }
+                    },
+                    child: Text(
+                      allTransactionsVisible ? 'Show Less' : 'View All',
+                      style: GoogleFonts.poppins(
+                        color: const Color(0xFFFF1493),
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 8)),
+        if (coinProvider.isLoadingTransactions &&
+            coinProvider.transactions.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _buildHistoryShimmer(),
+            ),
+          )
+        else if (coinProvider.transactions.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _buildHistoryEmptyState(),
+            ),
+          )
+        else
+          SliverList.builder(
+            itemCount: transactionCount,
+            itemBuilder: (context, index) {
+              if (index == transactionCount - 1 &&
+                  transactionCount < coinProvider.transactions.length) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  _walletLazy.loadMoreTransactions(
+                    coinProvider.transactions.length,
+                  );
+                });
+              }
+              final tx = coinProvider.transactions[index];
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: RepaintBoundary(
+                  child: _buildTransactionItem(
+                    tx,
+                    historyProvider,
+                    currentUserId,
+                  ),
+                ),
+              );
+            },
+          ),
+        const SliverToBoxAdapter(child: SizedBox(height: 24)),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFFF1E6F), Color(0xFFFF0055)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                      // Gift Box Coin overflow illustration
+                      Image.asset(
+                        'assets/illustrations/gift_box_coins.png',
+                        height: 52,
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, _, __) => const SizedBox(),
+                      ),
+                      const SizedBox(width: 12),
+                      // Banner Copy
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Get 20% Extra Coins',
+                              style: GoogleFonts.poppins(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'On your first recharge today!',
+                              style: GoogleFonts.poppins(
+                                color: Colors.white.withOpacity(0.9),
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Action button
+                      InkWell(
+                        onTap: () {
+                          // Open checkout for best package
+                          final bestPackage = _packages.firstWhere(
+                            (p) => p.coins >= 6000,
+                            orElse: () => _packages.isNotEmpty ? _packages.last : const CoinPackage(id: '', coins: 0, price: '', priceValue: 0.0, talkTime: '', icon: Icons.star),
+                          );
+                          if (bestPackage.id.isNotEmpty) {
+                            _openCheckoutSheet(bestPackage);
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'Recharge Now',
+                                style: GoogleFonts.poppins(
+                                  color: const Color(0xFFFF0055),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 10,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              const Icon(Icons.arrow_forward_ios_rounded, color: Color(0xFFFF0055), size: 8),
+                            ],
+                          ),
+                        ),
+                      ),
                 ],
               ),
             ),
-            const SizedBox(height: 24),
-
-            // Packages Section Title
-            Text(
-              'Select Coin Package',
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.w700,
-                fontSize: 18,
-                color: const Color(0xFF333333),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Grid of Packages
-            _isLoading && _packages.isEmpty
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 40.0),
-                      child: CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF1493)),
-                      ),
-                    ),
-                  )
-                : GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 2,
-                      crossAxisSpacing: 16,
-                      mainAxisSpacing: 16,
-                      childAspectRatio: 0.85,
-                    ),
-                    itemCount: _packages.length,
-                    itemBuilder: (context, index) {
-                      final package = _packages[index];
-                      return _buildPackageCard(package);
-                    },
-                  ),
-            const SizedBox(height: 40),
-          ],
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: SizedBox(height: widget.isTab ? 16.0 : 30.0),
+        ),
+      ],
         ),
       ),
     );
   }
 
-  // Build a single Package Card widget
-  Widget _buildPackageCard(CoinPackage package) {
+  Widget _buildQuickActionItem(IconData icon, String label, VoidCallback onTap) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 4),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.02),
+                blurRadius: 8,
+                offset: const Offset(0, 4),
+              ),
+            ],
+            border: Border.all(color: const Color(0xFFF3F3F3), width: 1),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFFF0F5),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: const Color(0xFFFF1493), size: 20),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                style: GoogleFonts.poppins(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF555555),
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+
+  Widget _buildPackageCardRedesignedHorizontal(CoinPackage package) {
     return ScalePressedButton(
       onTap: () => _openCheckoutSheet(package),
       child: Stack(
         clipBehavior: Clip.none,
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            width: double.infinity,
+            margin: const EdgeInsets.only(top: 10, bottom: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(24),
+              borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: package.badge != null ? const Color(0xFFFF1493).withOpacity(0.3) : const Color(0xFFEAEAEA),
-                width: package.badge != null ? 1.5 : 1.0,
+                color: package.isMostPopular ? const Color(0xFFFF1493) : const Color(0xFFEAEAEA),
+                width: package.isMostPopular ? 1.8 : 1.0,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.04),
-                  blurRadius: 15,
-                  offset: const Offset(0, 8),
+                  color: package.isMostPopular
+                      ? const Color(0xFFFF1493).withOpacity(0.08)
+                      : Colors.black.withOpacity(0.03),
+                  blurRadius: package.isMostPopular ? 10 : 6,
+                  offset: const Offset(0, 4),
                 ),
               ],
             ),
@@ -390,112 +1046,318 @@ class _CoinRechargeScreenState extends State<CoinRechargeScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Icon Illustration
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFF1493).withOpacity(0.08),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(package.icon, color: const Color(0xFFFF1493), size: 24),
-                ),
-                const SizedBox(height: 8),
-
                 // Coins Count
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 18,
-                      height: 18,
-                      decoration: const BoxDecoration(
-                        color: Colors.amber,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Center(
-                        child: Text(
-                          'H',
-                          style: GoogleFonts.poppins(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '${package.coins}',
-                      style: GoogleFonts.poppins(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        color: const Color(0xFF333333),
-                      ),
-                    ),
-                  ],
-                ),
-
-                // Talk time equivalent
                 Text(
-                  package.talkTime,
-                  textAlign: TextAlign.center,
+                  _formatCoins(package.coins),
                   style: GoogleFonts.poppins(
-                    fontSize: 13,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFF222222),
+                  ),
+                ),
+                Text(
+                  'Coins',
+                  style: GoogleFonts.poppins(
+                    fontSize: 9,
                     color: const Color(0xFF777777),
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 6),
 
-                // Price Badge
-                Container(
-                  width: double.infinity,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(19),
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFFFF1493), Color(0xFFFF4DA6)],
+                // Package Image
+                Expanded(
+                  child: Image.asset(
+                    _getPackageImage(package.coins),
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, _, __) => Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFF1493).withOpacity(0.08),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(package.icon, color: const Color(0xFFFF1493), size: 18),
                     ),
                   ),
-                  child: Center(
-                    child: Text(
-                      package.price,
-                      style: GoogleFonts.poppins(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
+                ),
+                const SizedBox(height: 8),
+
+                // Price Badge Pill (Solid Pink with White Text)
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFF1493),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFFF1493).withOpacity(0.25),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    package.price,
+                    style: GoogleFonts.poppins(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+
+                // Extra text (e.g. 5% EXTRA) below the price
+                if (package.extraText != null)
+                  Container(
+                    margin: const EdgeInsets.only(top: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF0F5),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: const Color(0xFFFF1493).withOpacity(0.3),
+                        width: 1,
                       ),
                     ),
+                    child: Text(
+                      package.extraText!,
+                      style: GoogleFonts.poppins(
+                        color: const Color(0xFFFF1493),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          // "Most Popular" Tag
+          if (package.isMostPopular)
+            Positioned(
+              top: 0,
+              left: 8,
+              right: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 2.5),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(6),
+                  color: const Color(0xFFFF1493),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFFF1493).withOpacity(0.3),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Text(
+                    'Most Popular',
+                    style: GoogleFonts.poppins(
+                      color: Colors.white,
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    maxLines: 1,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTransactionItem(WalletTransaction tx, CallHistoryProvider historyProvider, String currentUserId) {
+    IconData icon;
+    Color iconColor = const Color(0xFFFF1493);
+    Color bgCircleColor = const Color(0xFFFFF0F5);
+    String subtitle = '';
+
+    if (tx.type == 'recharge') {
+      icon = Icons.add_circle_outline_rounded;
+      subtitle = tx.referenceId != null ? 'Order #${tx.referenceId}' : 'Recharge package';
+    } else if (tx.type == 'call_deduction') {
+      // Find matching call in history
+      final call = historyProvider.items.firstWhere(
+        (c) => c.id == tx.referenceId,
+        orElse: () => CallHistoryItem(
+          id: '',
+          callerId: '',
+          callerName: '',
+          creatorId: '',
+          creatorName: '',
+          type: tx.description?.toLowerCase().contains('video') == true ? 'video' : 'voice',
+          status: '',
+          durationSeconds: 0,
+          coinsDeducted: tx.amount.abs(),
+          startedAt: tx.date,
+        ),
+      );
+
+      icon = call.isVideo ? Icons.videocam_rounded : Icons.call_rounded;
+      if (call.id.isNotEmpty) {
+        subtitle = 'With ${call.otherPartyName(currentUserId)}';
+      } else {
+        subtitle = tx.description ?? 'Call Session';
+      }
+    } else if (tx.type == 'refund') {
+      icon = Icons.replay_rounded;
+      subtitle = tx.description ?? 'Coins Refunded';
+    } else {
+      icon = tx.amount >= 0 ? Icons.add_rounded : Icons.remove_rounded;
+      subtitle = tx.description ?? 'Wallet Adjustment';
+    }
+
+    final isPositive = tx.amount > 0;
+    final amountText = isPositive ? '+${_formatCoins(tx.amount)}' : _formatCoins(tx.amount);
+    final amountColor = isPositive ? const Color(0xFF2ECC71) : const Color(0xFFFF2A6D);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      decoration: const BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: Color(0xFFF2F2F2), width: 1),
+        ),
+      ),
+      child: Row(
+        children: [
+          // Circular Icon
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: bgCircleColor,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: iconColor, size: 20),
+          ),
+          const SizedBox(width: 14),
+
+          // Transaction Info
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  tx.displayTitle,
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                    color: const Color(0xFF222222),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    color: const Color(0xFF777777),
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ],
             ),
           ),
 
-          // Optional Badges at the top-right
-          if (package.badge != null)
-            Positioned(
-              top: -8,
-              right: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFFC85CFF), Color(0xFF8A2BE2)],
-                  ),
-                ),
-                child: Text(
-                  package.badge!,
-                  style: GoogleFonts.poppins(
-                    color: Colors.white,
-                    fontSize: 9,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 0.5,
-                  ),
+          // Amount and Date
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                amountText,
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15,
+                  color: amountColor,
                 ),
               ),
+              const SizedBox(height: 2),
+              Text(
+                tx.formattedDate(),
+                style: GoogleFonts.poppins(
+                  fontSize: 10,
+                  color: const Color(0xFF999999),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHistoryShimmer() {
+    return Column(
+      children: List.generate(3, (index) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: const BoxDecoration(
+          border: Border(bottom: BorderSide(color: Color(0xFFF2F2F2), width: 1)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: const BoxDecoration(color: Color(0xFFEEEEEE), shape: BoxShape.circle),
             ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(width: 100, height: 14, color: const Color(0xFFEEEEEE)),
+                  const SizedBox(height: 6),
+                  Container(width: 150, height: 10, color: const Color(0xFFEEEEEE)),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Container(width: 40, height: 14, color: const Color(0xFFEEEEEE)),
+                const SizedBox(height: 6),
+                Container(width: 60, height: 10, color: const Color(0xFFEEEEEE)),
+              ],
+            ),
+          ],
+        ),
+      )),
+    );
+  }
+
+  Widget _buildHistoryEmptyState() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFF2F2F2)),
+      ),
+      child: Column(
+        children: [
+          Icon(Icons.history_toggle_off_rounded, color: Colors.grey.shade400, size: 40),
+          const SizedBox(height: 12),
+          Text(
+            'No transactions yet',
+            style: GoogleFonts.poppins(
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+              color: const Color(0xFF555555),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Recharge your wallet or start calling to log transactions here.',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.poppins(
+              fontSize: 11,
+              color: const Color(0xFF888888),
+            ),
+          ),
         ],
       ),
     );
@@ -577,29 +1439,45 @@ class _PaymentFlowSheetState extends State<_PaymentFlowSheet> with SingleTickerP
   }
 
   Future<void> _creditCoinsAfterVerify(Map<String, dynamic> verifyBody) async {
-    final token = context.read<AuthProvider>().accessToken;
+    final auth = context.read<AuthProvider>();
+    final wallet = context.read<WalletProvider>();
+    final token = auth.accessToken;
     if (token == null) throw Exception('Please sign in to recharge.');
 
-    final dio = createApiDio(accessToken: token);
     debugPrint('Calling /payments/verify');
     debugPrint('Verify request body: $verifyBody');
-    final verifyRes = await dio.post('/api/payments/verify', data: verifyBody);
+    final verifyRes = await apiDio.post(
+      '/api/payments/verify',
+      data: verifyBody,
+      options: authOptions(token),
+    );
     debugPrint('Verify Response: ${verifyRes.data}');
 
-    final verifyData = verifyRes.data;
-    final wallet = context.read<WalletProvider>();
-    final auth = context.read<AuthProvider>();
-
-    if (verifyData is Map) {
-      final serverBalance = verifyData['newBalance'] ?? verifyData['new_balance'];
-      if (serverBalance is num) {
-        wallet.setBalanceFromServer(serverBalance.toInt());
+    int? verifiedBalance;
+    if (verifyRes.data is Map) {
+      final verifyData = Map<String, dynamic>.from(verifyRes.data as Map);
+      final rawBalance =
+          verifyData['newBalance'] ?? verifyData['new_balance'];
+      if (rawBalance is num) {
+        verifiedBalance = rawBalance.toInt();
+      } else if (rawBalance is String) {
+        verifiedBalance = int.tryParse(rawBalance);
+      }
+      if (verifiedBalance != null) {
+        wallet.setBalanceFromServer(verifiedBalance);
+      } else {
+        final payment = verifyData['payment'];
+        if (payment is Map) {
+          final added = payment['coinsAdded'] ?? payment['coins_added'];
+          if (added is num) {
+            wallet.setBalanceFromServer(wallet.balance + added.toInt());
+          }
+        }
       }
     }
 
-    // Sequential: verify RPC balance first, then confirm via /api/wallet.
-    // refreshUser last — must not trigger wallet reload (see WalletProvider.updateAuth).
-    await wallet.loadWallet(reason: 'postVerify');
+    // Confirm via /api/wallet (won't downgrade after postVerify — see WalletProvider).
+    await wallet.loadWallet(reason: 'postVerify', accessToken: token);
     await auth.refreshUser();
 
     if (!mounted) return;
@@ -745,14 +1623,13 @@ class _PaymentFlowSheetState extends State<_PaymentFlowSheet> with SingleTickerP
     setState(() => _isProcessing = true);
 
     try {
-      final dio = createApiDio(accessToken: token);
-
       final createOrderPayload = <String, String>{'packageId': packageId};
       debugPrint('CREATE-ORDER PAYLOAD: $createOrderPayload');
 
-      final orderRes = await dio.post(
+      final orderRes = await apiDio.post(
         '/api/payments/create-order',
         data: createOrderPayload,
+        options: authOptions(token),
       );
 
       final orderData = orderRes.data as Map<String, dynamic>;

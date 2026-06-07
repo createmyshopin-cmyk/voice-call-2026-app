@@ -1,0 +1,3 @@
+@echo off
+echo Starting Flutter Stable Emulator...
+"%LOCALAPPDATA%\Android\Sdk\emulator\emulator.exe" -avd Flutter_Stable

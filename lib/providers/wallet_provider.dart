@@ -1,7 +1,8 @@
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
-import '../services/api_config.dart';
+import '../models/wallet_transaction.dart';
+import '../services/api_client.dart' show apiDio, authOptions;
 
 class WalletProvider with ChangeNotifier {
   int _balance = 0;
@@ -10,17 +11,30 @@ class WalletProvider with ChangeNotifier {
   /// Tracks the user we last seeded for — only reseed on login / user switch.
   String? _currentUserId;
 
-  final Dio _dio = Dio(BaseOptions(
-    baseUrl: apiBaseUrl,
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 10),
-  ));
+  List<WalletTransaction> _transactions = [];
+  bool _isLoadingTransactions = false;
+
+  final Dio _dio = apiDio;
 
   int get balance => _balance;
   String? get userId => _userId;
   String? get accessToken => _accessToken;
+  List<WalletTransaction> get transactions => _transactions;
+  bool get isLoadingTransactions => _isLoadingTransactions;
 
-  void _writeBalance(String source, int value) {
+  int? _parseBalance(dynamic value) {
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
+  }
+
+  void _writeBalance(String source, int value, {bool allowDecrease = true}) {
+    if (!allowDecrease && value < _balance) {
+      debugPrint(
+        '[WalletProvider] $source ignored stale $value (keeping $_balance)',
+      );
+      return;
+    }
     debugPrint(
       '[WalletProvider] $source => balance $_balance -> $value',
     );
@@ -72,30 +86,75 @@ class WalletProvider with ChangeNotifier {
     _writeBalance('setBalance', coins);
   }
 
-  Future<void> loadWallet({String reason = 'manual'}) async {
-    if (_accessToken == null) return;
+  Future<void> loadWallet({
+    String reason = 'manual',
+    String? accessToken,
+  }) async {
+    final token = accessToken ?? _accessToken;
+    if (token == null) return;
     try {
       final response = await _dio.get(
         '/api/wallet',
         options: Options(
           headers: {
-            'Authorization': 'Bearer $_accessToken',
+            'Authorization': 'Bearer $token',
           },
         ),
       );
       if (response.statusCode == 200) {
-        final data = response.data as Map<String, dynamic>;
-        final serverBalance = (data['coins'] as num?)?.toInt() ??
-            (data['coin_balance'] as num?)?.toInt() ??
+        final raw = response.data;
+        if (raw is! Map) {
+          debugPrint('[WalletProvider] loadWallet:$reason unexpected body: $raw');
+          return;
+        }
+        final data = Map<String, dynamic>.from(raw);
+        final serverBalance = _parseBalance(data['coins']) ??
+            _parseBalance(data['coin_balance']) ??
             0;
         debugPrint(
           '[WalletProvider] loadWallet:$reason => server balance=$serverBalance '
           'raw=$data',
         );
-        _writeBalance('loadWallet:$reason', serverBalance);
+        final allowDecrease = reason == 'login' || reason == 'tokenRefresh';
+        _writeBalance(
+          'loadWallet:$reason',
+          serverBalance,
+          allowDecrease: allowDecrease,
+        );
       }
     } catch (e) {
       debugPrint('[WalletProvider] loadWallet:$reason error: $e');
+    }
+  }
+
+  Future<void> fetchTransactions() async {
+    final token = _accessToken;
+    if (token == null) return;
+    _isLoadingTransactions = true;
+    notifyListeners();
+    try {
+      final response = await _dio.get(
+        '/api/wallets/transactions',
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $token',
+          },
+        ),
+      );
+      if (response.statusCode == 200) {
+        final List<dynamic> data = response.data;
+        _transactions = data
+            .map((json) => WalletTransaction.fromJson(json as Map<String, dynamic>))
+            .toList();
+        debugPrint(
+          '[WalletProvider] fetchTransactions loaded ${_transactions.length} transactions',
+        );
+      }
+    } catch (e) {
+      debugPrint('[WalletProvider] fetchTransactions error: $e');
+    } finally {
+      _isLoadingTransactions = false;
+      notifyListeners();
     }
   }
 
@@ -106,6 +165,8 @@ class WalletProvider with ChangeNotifier {
       return true;
     }
     try {
+      final token = _accessToken;
+      if (token == null) return false;
       final response = await _dio.post(
         '/api/wallets/adjust',
         data: {
@@ -113,6 +174,7 @@ class WalletProvider with ChangeNotifier {
           'amount': -amount,
           'reason': 'User coin deduction',
         },
+        options: authOptions(token),
       );
       if (response.statusCode == 200 || response.statusCode == 201) {
         await loadWallet(reason: 'deductCoins');
@@ -132,6 +194,8 @@ class WalletProvider with ChangeNotifier {
       return;
     }
     try {
+      final token = _accessToken;
+      if (token == null) return;
       final response = await _dio.post(
         '/api/wallets/adjust',
         data: {
@@ -139,6 +203,7 @@ class WalletProvider with ChangeNotifier {
           'amount': amount,
           'reason': 'User recharge package',
         },
+        options: authOptions(token),
       );
       if (response.statusCode == 200 || response.statusCode == 201) {
         await loadWallet(reason: 'addCoins');

@@ -1,20 +1,32 @@
 import 'package:dio/dio.dart';
 
-import 'api_config.dart';
+import 'api_client.dart';
 
-/// POST /api/creators/heartbeat — updates creator last_seen_at on the server.
+/// Creator presence: online/offline toggle + heartbeat while online.
 class CreatorHeartbeatService {
-  static const heartbeatInterval = Duration(seconds: 45);
+  static const heartbeatInterval = Duration(seconds: 30);
 
   final Dio _dio;
 
-  CreatorHeartbeatService({Dio? dio})
-      : _dio = dio ??
-            Dio(BaseOptions(
-              baseUrl: apiBaseUrl,
-              connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 10),
-            ));
+  CreatorHeartbeatService({Dio? dio}) : _dio = dio ?? apiDio;
+
+  Future<void> setOnline(String accessToken) async {
+    await _dio.post(
+      '/api/creators/online',
+      options: Options(
+        headers: {'Authorization': 'Bearer $accessToken'},
+      ),
+    );
+  }
+
+  Future<void> setOffline(String accessToken) async {
+    await _dio.post(
+      '/api/creators/offline',
+      options: Options(
+        headers: {'Authorization': 'Bearer $accessToken'},
+      ),
+    );
+  }
 
   Future<void> sendHeartbeat(String accessToken) async {
     await _dio.post(

@@ -5,9 +5,12 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/creator_heartbeat_provider.dart';
 import '../providers/call_history_provider.dart';
+import '../providers/network_provider.dart';
+import '../widgets/common/app_shimmer.dart';
 import '../services/call_service.dart';
 import '../services/incoming_call_coordinator.dart';
 import '../services/incoming_call_ringtone.dart';
+import '../core/network/api_exception.dart';
 import '../utils/api_error_message.dart';
 import '../services/payout_service.dart';
 import '../services/creator_stats_service.dart';
@@ -43,11 +46,26 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
   int _totalTalkMinutes = 0;
   String _pickedRateLabel = '—';
 
+  NetworkProvider? _networkProvider;
+
   @override
   void initState() {
     super.initState();
     _loadPayoutData();
     _loadEarningsStats();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _networkProvider = context.read<NetworkProvider>();
+      _networkProvider!.registerRecoveryCallback(_onNetworkRecovery);
+    });
+  }
+
+  Future<void> _onNetworkRecovery() async {
+    if (!mounted) return;
+    if (_isOnline) {
+      await _pollPendingRequests();
+    }
+    await _loadPayoutData();
   }
 
   Future<void> _loadEarningsStats() async {
@@ -118,9 +136,10 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
       }
     } catch (e) {
       if (mounted) {
+        final ex = ApiException.from(e);
         setState(() {
           _loadingPayouts = false;
-          _payoutError = 'Failed to load payout data: $e';
+          _payoutError = ex.isNoInternet ? null : ex.message;
         });
       }
     }
@@ -134,6 +153,7 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
 
   @override
   void dispose() {
+    _networkProvider?.unregisterRecoveryCallback(_onNetworkRecovery);
     _pendingPollTimer?.cancel();
     super.dispose();
   }
@@ -668,10 +688,9 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
   // --- TAB 2: PAYOUT WITHDRAW TAB ---
   Widget _buildPayoutTab() {
     if (_loadingPayouts && _walletBalance == null) {
-      return const Center(
-        child: CircularProgressIndicator(
-          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFBA9EFF)),
-        ),
+      return const Padding(
+        padding: EdgeInsets.all(20),
+        child: ListSkeletonLoader(itemCount: 5, itemHeight: 88),
       );
     }
 
@@ -1004,10 +1023,9 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
     }
 
     if (historyProvider.isLoading && historyProvider.items.isEmpty) {
-      return const Center(
-        child: CircularProgressIndicator(
-          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8A2BE2)),
-        ),
+      return const Padding(
+        padding: EdgeInsets.all(20),
+        child: ListSkeletonLoader(itemCount: 6, itemHeight: 72),
       );
     }
 

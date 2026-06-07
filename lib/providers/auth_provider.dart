@@ -4,7 +4,8 @@ import 'package:dio/dio.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show ChangeNotifier, debugPrint, kDebugMode;
 
-import '../services/api_config.dart';
+import '../core/network/api_exception.dart';
+import '../services/api_client.dart';
 import '../services/fcm_service.dart';
 import '../services/session_storage.dart';
 import '../services/users_service.dart';
@@ -25,6 +26,14 @@ class AppUser {
   final bool onboardingCompleted;
   final String role;
   final String creatorStatus;
+  final bool isCreator;
+
+  /// Profile display name — always prefers [fullName] over legacy [name].
+  String get displayName {
+    final full = fullName?.trim();
+    if (full != null && full.isNotEmpty) return full;
+    return name.trim();
+  }
 
   AppUser({
     required this.uid,
@@ -42,15 +51,18 @@ class AppUser {
     this.onboardingCompleted = false,
     this.role = 'user',
     this.creatorStatus = 'none',
+    this.isCreator = false,
   });
 
   factory AppUser.fromJson(Map<String, dynamic> json) {
-    final fullName = json['fullName'] as String? ??
-        json['full_name'] as String? ??
-        json['name'] as String?;
+    final fullName = json['fullName'] as String? ?? json['full_name'] as String?;
+    final legacyName = json['name'] as String? ?? '';
+    final resolvedName = (fullName?.trim().isNotEmpty == true)
+        ? fullName!.trim()
+        : legacyName.trim();
     return AppUser(
       uid: json['id'] as String,
-      name: fullName ?? json['name'] as String? ?? '',
+      name: resolvedName,
       phone: json['phone'] as String? ?? '',
       email: json['email'] as String? ?? '',
       coins: json['coins'] as int? ?? 0,
@@ -68,6 +80,7 @@ class AppUser {
           false,
       role: json['role'] as String? ?? 'user',
       creatorStatus: json['creatorStatus'] as String? ?? json['creator_status'] as String? ?? 'none',
+      isCreator: json['isCreator'] as bool? ?? json['is_creator'] as bool? ?? false,
     );
   }
 }
@@ -78,6 +91,8 @@ class AuthProvider with ChangeNotifier {
   String? _verificationId;
   int? _forceResendingToken;
   String? _pendingPhoneE164;
+  bool _phoneAuthAutoVerified = false;
+  Future<void>? _inFlightAutoVerify;
   bool _isLoading = false;
   bool _isInitializing = true;
   String? _lastError;
@@ -85,11 +100,7 @@ class AuthProvider with ChangeNotifier {
   Map<String, dynamic>? _listenerProfile;
 
   final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
-  final Dio _dio = Dio(BaseOptions(
-    baseUrl: apiBaseUrl,
-    connectTimeout: const Duration(seconds: 10),
-    receiveTimeout: const Duration(seconds: 10),
-  ));
+  final Dio _dio = apiDio;
 
   final UsersService _usersService = UsersService();
 
@@ -109,13 +120,22 @@ class AuthProvider with ChangeNotifier {
   AppUser? get user => _user;
   String? get accessToken => _accessToken;
   String? get pendingPhoneE164 => _pendingPhoneE164;
+  String? get verificationId => _verificationId;
+  bool get hasVerificationInProgress =>
+      _verificationId != null && _verificationId!.isNotEmpty;
+  bool get phoneAuthAutoVerified => _phoneAuthAutoVerified;
 
-  bool get isListener =>
-      (_user?.role == 'creator' ||
-          creatorStatus == 'approved' ||
-          creatorStatus == 'active') &&
-      creatorStatus != 'suspended';
   String get creatorStatus => _creatorStatus ?? _user?.creatorStatus ?? 'none';
+
+  /// Approved/active creator — unlocks listener mode and earnings UI.
+  bool get isActiveCreator {
+    if (creatorStatus == 'suspended') return false;
+    if (creatorStatus == 'active' || creatorStatus == 'approved') return true;
+    if (_user?.isCreator == true) return true;
+    return _user?.role == 'creator';
+  }
+
+  bool get isListener => isActiveCreator;
   Map<String, dynamic>? get listenerProfile => _listenerProfile;
 
   Future<void> applyForListener({
@@ -152,7 +172,8 @@ class AuthProvider with ChangeNotifier {
         throw Exception('Failed to submit listener application');
       }
     } on DioException catch (e) {
-      _lastError = e.response?.data?.toString() ?? e.message;
+      final ex = ApiException.from(e);
+      if (!ex.isNoInternet) _lastError = ex.message;
       rethrow;
     } finally {
       _setLoading(false);
@@ -175,19 +196,27 @@ class AuthProvider with ChangeNotifier {
       if (response.statusCode == 200) {
         _listenerProfile = response.data as Map<String, dynamic>;
         final statusVal = _listenerProfile?['status'] as String?;
-        if (statusVal != null) {
+        if (statusVal != null && statusVal.isNotEmpty) {
           _creatorStatus = statusVal;
+        } else if (_user?.isCreator == true) {
+          _creatorStatus = 'active';
         } else {
           _creatorStatus = 'none';
         }
+      } else if (_user?.isCreator == true) {
+        _creatorStatus = 'active';
       } else {
         _creatorStatus = 'none';
         _listenerProfile = null;
       }
       notifyListeners();
     } catch (e) {
-      _creatorStatus = 'none';
-      _listenerProfile = null;
+      if (_user?.isCreator != true) {
+        _creatorStatus = 'none';
+        _listenerProfile = null;
+      } else {
+        _creatorStatus = 'active';
+      }
       notifyListeners();
     }
   }
@@ -227,6 +256,8 @@ class AuthProvider with ChangeNotifier {
 
       if (_firebaseAuth.currentUser != null) {
         await loginWithFirebase();
+      } else {
+        await _restoreOtpState();
       }
     } catch (e) {
       debugPrint('Session restore failed: $e');
@@ -247,6 +278,44 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  void _logOtp(String message) {
+    debugPrint('[OTP] $message');
+  }
+
+  void setVerificationId(String id, {int? resendToken}) {
+    _verificationId = id;
+    if (resendToken != null) {
+      _forceResendingToken = resendToken;
+    }
+    _logOtp('verificationId saved');
+    final phone = _pendingPhoneE164;
+    if (phone != null) {
+      unawaited(SessionStorage.saveOtpState(
+        verificationId: id,
+        phoneE164: phone,
+      ));
+    }
+    notifyListeners();
+  }
+
+  Future<void> clearVerificationId({bool notify = true}) async {
+    _verificationId = null;
+    _forceResendingToken = null;
+    _phoneAuthAutoVerified = false;
+    _inFlightAutoVerify = null;
+    await SessionStorage.clearOtpState();
+    if (notify) notifyListeners();
+  }
+
+  Future<void> _restoreOtpState() async {
+    if (isAuthenticated) return;
+    final savedId = await SessionStorage.readVerificationId();
+    if (savedId == null || savedId.isEmpty) return;
+    _verificationId = savedId;
+    _pendingPhoneE164 ??= await SessionStorage.readPendingPhone();
+    _logOtp('verificationId restored from storage');
+  }
+
   /// Debug verification: confirms a real Firebase phone user and ID token (not mock).
   Future<void> _logFirebaseUserSession(String step) async {
     if (!kDebugMode) return;
@@ -263,11 +332,58 @@ class AuthProvider with ChangeNotifier {
     }
   }
 
+  Future<void> _handleAutoVerification(PhoneAuthCredential credential) async {
+    _phoneAuthAutoVerified = true;
+    _logOtp('Auto verification success');
+    await _firebaseAuth.signInWithCredential(credential);
+    _logOtp('Firebase sign-in success');
+    await loginWithFirebase();
+    _logOtp('Backend login success');
+    await clearVerificationId(notify: false);
+  }
+
+  Future<void> _awaitInFlightAutoVerify() async {
+    final inFlight = _inFlightAutoVerify;
+    if (inFlight != null) {
+      try {
+        await inFlight;
+      } catch (_) {
+        // Caller surfaces errors via lastError / rethrow from sendPhoneOtp.
+      }
+      return;
+    }
+
+    // codeSent can finish before verificationCompleted starts on Android.
+    if (!isAuthenticated && !hasFirebaseSession) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      final delayed = _inFlightAutoVerify;
+      if (delayed != null) {
+        try {
+          await delayed;
+        } catch (_) {}
+      }
+    }
+
+    if (hasFirebaseSession && !isAuthenticated) {
+      _logOtp('Firebase session detected after send — completing backend login');
+      await loginWithFirebase();
+      await clearVerificationId(notify: false);
+    }
+  }
+
   /// Sends an SMS OTP via Firebase Phone Authentication.
   Future<void> sendPhoneOtp(String phoneE164, {bool isResend = false}) async {
     _setLoading(true);
     _lastError = null;
     _pendingPhoneE164 = phoneE164;
+    _phoneAuthAutoVerified = false;
+    _inFlightAutoVerify = null;
+
+    if (isResend) {
+      _logOtp('resend OTP requested');
+    } else {
+      _logOtp('verifyPhoneNumber started');
+    }
 
     final completer = Completer<void>();
 
@@ -277,41 +393,79 @@ class AuthProvider with ChangeNotifier {
         timeout: const Duration(seconds: 60),
         forceResendingToken: isResend ? _forceResendingToken : null,
         verificationCompleted: (PhoneAuthCredential credential) async {
+          _logOtp('verificationCompleted');
+          _inFlightAutoVerify = _handleAutoVerification(credential);
           try {
-            await _firebaseAuth.signInWithCredential(credential);
-            await loginWithFirebase();
+            await _inFlightAutoVerify;
             if (!completer.isCompleted) completer.complete();
           } catch (e) {
+            _phoneAuthAutoVerified = false;
             if (!completer.isCompleted) completer.completeError(e);
           }
         },
         verificationFailed: (FirebaseAuthException e) {
+          _logOtp('verificationFailed: ${e.code}');
           _lastError = e.message ?? 'Phone verification failed';
           if (!completer.isCompleted) {
             completer.completeError(e);
           }
         },
         codeSent: (String verificationId, int? resendToken) {
-          _verificationId = verificationId;
-          _forceResendingToken = resendToken;
+          _logOtp('codeSent');
+          setVerificationId(verificationId, resendToken: resendToken);
           if (!completer.isCompleted) completer.complete();
         },
         codeAutoRetrievalTimeout: (String verificationId) {
-          _verificationId = verificationId;
+          _logOtp('timeout — manual OTP entry still allowed');
+          setVerificationId(verificationId);
         },
       );
 
       await completer.future;
+      await _awaitInFlightAutoVerify();
     } finally {
       _setLoading(false);
+      notifyListeners();
     }
   }
 
   /// Verifies the SMS code, signs into Firebase, and exchanges the ID token with the API.
   Future<void> verifyPhoneOtp(String smsCode) async {
+    _logOtp('verifyOtp clicked');
+    _logOtp(
+      'verificationId value: ${hasVerificationInProgress ? "present" : "null"}',
+    );
+
+    if (_inFlightAutoVerify != null) {
+      _logOtp('waiting for in-flight auto-verification');
+      try {
+        await _inFlightAutoVerify;
+      } catch (_) {}
+    }
+
+    if (isAuthenticated) {
+      _logOtp('Already authenticated — skipping manual OTP');
+      await clearVerificationId();
+      return;
+    }
+
+    if (hasFirebaseSession && _accessToken == null) {
+      _logOtp('Firebase session exists — completing backend login');
+      await loginWithFirebase();
+      await clearVerificationId();
+      return;
+    }
+
     final verificationId = _verificationId;
     if (verificationId == null) {
-      throw StateError('No verification in progress. Request a new OTP.');
+      if (hasFirebaseSession) {
+        await loginWithFirebase();
+        await clearVerificationId();
+        return;
+      }
+      throw StateError(
+        'Verification expired. Please request a new OTP.',
+      );
     }
 
     _setLoading(true);
@@ -323,9 +477,9 @@ class AuthProvider with ChangeNotifier {
         smsCode: smsCode.trim(),
       );
       await _firebaseAuth.signInWithCredential(credential);
+      _logOtp('Firebase sign-in success');
       await _logFirebaseUserSession('after-otp');
-      _verificationId = null;
-      _forceResendingToken = null;
+      await clearVerificationId(notify: false);
     } on FirebaseAuthException catch (e) {
       _lastError = e.message ?? 'Invalid verification code';
       rethrow;
@@ -334,6 +488,7 @@ class AuthProvider with ChangeNotifier {
     }
 
     await loginWithFirebase();
+    _logOtp('Backend login success');
   }
 
   /// Exchanges the current Firebase session for an API JWT and loads the user profile.
@@ -375,7 +530,8 @@ class AuthProvider with ChangeNotifier {
       }
       notifyListeners();
     } on DioException catch (e) {
-      _lastError = e.response?.data?.toString() ?? e.message;
+      final ex = ApiException.from(e);
+      if (!ex.isNoInternet) _lastError = ex.message;
       rethrow;
     } finally {
       _setLoading(false);
@@ -450,6 +606,10 @@ class AuthProvider with ChangeNotifier {
 
     if (response.statusCode == 200) {
       _user = AppUser.fromJson(response.data as Map<String, dynamic>);
+      if (_user?.isCreator == true &&
+          (_creatorStatus == null || _creatorStatus == 'none')) {
+        _creatorStatus = 'active';
+      }
       debugPrint(
         '[AuthProvider] loadProfile => users.coins=${_user?.coins}',
       );
@@ -469,10 +629,9 @@ class AuthProvider with ChangeNotifier {
     await SessionStorage.clearAccessToken();
     _user = null;
     _accessToken = null;
-    _verificationId = null;
-    _forceResendingToken = null;
     _pendingPhoneE164 = null;
     _lastError = null;
+    await clearVerificationId(notify: false);
     notifyListeners();
   }
 }

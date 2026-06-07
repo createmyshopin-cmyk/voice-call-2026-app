@@ -85,7 +85,7 @@ git push -u origin main
 2. Click **Add New** → **Project**.
 3. Select your `admin-panel` repository.
 4. Under **Environment Variables**, add:
-   - `NEXT_PUBLIC_API_URL`: Your hosted Railway API endpoint with `/api` appended (e.g. `https://backend-api-production.up.railway.app/api`).
+   - `NEXT_PUBLIC_API_URL`: Your hosted API endpoint with `/api` appended (e.g. `https://api.creomine.com/api`).
 5. Click **Deploy**. Vercel will automatically build and serve the console.
 
 ---
@@ -98,7 +98,7 @@ Update the API endpoint url in the Flutter codebase to link the application.
 1. Open [flutter-app/lib/services/api_config.dart](file:///d:/Flutter%20calling%20android%20app%202026/flutter-app/lib/services/api_config.dart)
 2. Change the `baseUrl` variable:
    ```dart
-   const String baseUrl = "https://backend-api-production.up.railway.app/api";
+   const String baseUrl = "https://api.creomine.com/api";
    ```
 3. Place your production `google-services.json` downloaded from Firebase Console into `flutter-app/android/app/`.
 4. Compile release binaries:

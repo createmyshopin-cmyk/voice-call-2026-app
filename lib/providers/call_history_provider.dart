@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart';
+import '../core/network/api_exception.dart';
 import '../models/call_history_item.dart';
 import '../services/call_service.dart';
 
@@ -39,7 +40,10 @@ class CallHistoryProvider with ChangeNotifier {
       _error = null;
     } catch (e) {
       debugPrint('CallHistoryProvider.fetchHistory error: $e');
-      _error = 'Failed to load call history.';
+      final ex = ApiException.from(e);
+      if (!ex.isNoInternet) {
+        _error = ex.message;
+      }
     } finally {
       _isLoading = false;
       notifyListeners();

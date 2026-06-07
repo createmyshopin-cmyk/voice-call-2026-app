@@ -18,12 +18,17 @@ class CreatorEarningRecord {
 /// Live creator analytics from GET /api/creators/earnings-history + call history.
 class CreatorStatsService {
   final Dio _dio;
+  final String _accessToken;
 
-  CreatorStatsService({required String accessToken})
-      : _dio = createApiDio(accessToken: accessToken);
+  CreatorStatsService({required String accessToken, Dio? dio})
+      : _accessToken = accessToken,
+        _dio = dio ?? apiDio;
 
   Future<List<CreatorEarningRecord>> fetchEarningsHistory() async {
-    final response = await _dio.get('/api/creators/earnings-history');
+    final response = await _dio.get(
+      '/api/creators/earnings-history',
+      options: authOptions(_accessToken),
+    );
     final data = response.data;
     if (data is! List) return [];
     return data

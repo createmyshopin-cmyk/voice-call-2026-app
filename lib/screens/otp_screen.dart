@@ -5,9 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../main.dart' show networkService;
 import '../providers/auth_provider.dart';
-import 'create_profile_screen.dart';
-import 'home_screen.dart';
+import '../utils/api_error_message.dart';
+import '../utils/auth_navigation.dart';
 
 class OtpScreen extends StatefulWidget {
   final String phoneE164;
@@ -33,6 +34,8 @@ class _OtpScreenState extends State<OtpScreen> {
 
   int _timerSeconds = 60;
   Timer? _timer;
+  AuthProvider? _auth;
+  bool _isVerifying = false;
 
   static const Color kSurface = Color(0xFF080E1A);
   static const Color kPrimary = Color(0xFFBA9EFF);
@@ -48,6 +51,32 @@ class _OtpScreenState extends State<OtpScreen> {
   void initState() {
     super.initState();
     _startTimer();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeNavigateAfterAuth('init');
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final auth = context.read<AuthProvider>();
+    if (_auth != auth) {
+      _auth?.removeListener(_onAuthChanged);
+      _auth = auth;
+      _auth!.addListener(_onAuthChanged);
+    }
+  }
+
+  void _onAuthChanged() {
+    _maybeNavigateAfterAuth('auth-listener');
+  }
+
+  void _maybeNavigateAfterAuth(String source) {
+    if (!mounted) return;
+    final auth = context.read<AuthProvider>();
+    if (auth.isAuthenticated) {
+      navigateAfterPhoneAuth(context, auth, source: source);
+    }
   }
 
   void _startTimer() {
@@ -66,6 +95,8 @@ class _OtpScreenState extends State<OtpScreen> {
       _controllers.map((c) => c.text.trim()).join();
 
   Future<void> _verify() async {
+    if (_isVerifying) return;
+
     if (_otpCode.length != _otpLength) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Enter the $_otpLength-digit code')),
@@ -75,29 +106,53 @@ class _OtpScreenState extends State<OtpScreen> {
 
     final auth = context.read<AuthProvider>();
 
+    if (auth.isAuthenticated) {
+      navigateAfterPhoneAuth(context, auth, source: 'verify-already-auth');
+      return;
+    }
+
+    if (!auth.hasVerificationInProgress &&
+        !auth.hasFirebaseSession &&
+        !auth.isAuthenticated) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Verification expired. Please request a new OTP.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isVerifying = true);
+
     try {
       await auth.verifyPhoneOtp(_otpCode);
 
       if (!mounted) return;
 
-      final destination = auth.user?.onboardingCompleted == true
-          ? const HomeScreen()
-          : const CreateProfileScreen();
-
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => destination),
-      );
+      navigateAfterPhoneAuth(context, auth, source: 'verify-manual');
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.message ?? 'Invalid verification code')),
       );
-    } catch (e) {
+    } on StateError catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Verification failed: $e')),
+        SnackBar(content: Text(e.message)),
       );
+    } catch (e) {
+      if (!mounted) return;
+      final message = apiErrorMessage(
+        e,
+        fallback:
+            'Unable to connect to server. Please check your internet connection and try again.',
+        networkService: networkService,
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    } finally {
+      if (mounted) setState(() => _isVerifying = false);
     }
   }
 
@@ -105,8 +160,15 @@ class _OtpScreenState extends State<OtpScreen> {
     final auth = context.read<AuthProvider>();
     try {
       await auth.sendPhoneOtp(widget.phoneE164, isResend: true);
-      _startTimer();
+
       if (!mounted) return;
+
+      if (auth.isAuthenticated) {
+        navigateAfterPhoneAuth(context, auth, source: 'resend-auto');
+        return;
+      }
+
+      _startTimer();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('OTP sent again')),
       );
@@ -115,11 +177,17 @@ class _OtpScreenState extends State<OtpScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.message ?? 'Could not resend OTP')),
       );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not resend OTP: $e')),
+      );
     }
   }
 
   @override
   void dispose() {
+    _auth?.removeListener(_onAuthChanged);
     _timer?.cancel();
     for (final c in _controllers) {
       c.dispose();
@@ -133,6 +201,7 @@ class _OtpScreenState extends State<OtpScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
+    final busy = auth.isLoading || _isVerifying;
 
     return Scaffold(
       backgroundColor: kSurface,
@@ -146,7 +215,7 @@ class _OtpScreenState extends State<OtpScreen> {
                   alignment: Alignment.centerLeft,
                   child: IconButton(
                     icon: const Icon(Icons.arrow_back_ios, color: kOnSurface, size: 20),
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: busy ? null : () => Navigator.pop(context),
                   ),
                 ),
                 const SizedBox(height: 20),
@@ -190,7 +259,7 @@ class _OtpScreenState extends State<OtpScreen> {
                         textAlign: TextAlign.center,
                         keyboardType: TextInputType.number,
                         maxLength: 1,
-                        enabled: !auth.isLoading,
+                        enabled: !busy,
                         style: GoogleFonts.manrope(
                           fontSize: 22,
                           fontWeight: FontWeight.bold,
@@ -215,7 +284,7 @@ class _OtpScreenState extends State<OtpScreen> {
                           } else if (value.isEmpty && index > 0) {
                             _focusNodes[index - 1].requestFocus();
                           }
-                          if (_otpCode.length == _otpLength) {
+                          if (_otpCode.length == _otpLength && !busy) {
                             _verify();
                           }
                         },
@@ -225,18 +294,18 @@ class _OtpScreenState extends State<OtpScreen> {
                 ),
                 const SizedBox(height: 48),
                 GestureDetector(
-                  onTap: auth.isLoading ? null : _verify,
+                  onTap: busy ? null : _verify,
                   child: Container(
                     height: 56,
                     decoration: BoxDecoration(
-                      gradient: auth.isLoading
+                      gradient: busy
                           ? null
                           : const LinearGradient(colors: [kPrimary, kPrimaryDim]),
-                      color: auth.isLoading ? kSurfaceContainerHighest : null,
+                      color: busy ? kSurfaceContainerHighest : null,
                       borderRadius: BorderRadius.circular(28),
                     ),
                     child: Center(
-                      child: auth.isLoading
+                      child: busy
                           ? const SizedBox(
                               width: 24,
                               height: 24,
@@ -262,7 +331,7 @@ class _OtpScreenState extends State<OtpScreen> {
                       style: GoogleFonts.inter(color: kOnSurfaceVariant),
                     ),
                     TextButton(
-                      onPressed: _timerSeconds == 0 && !auth.isLoading ? _resend : null,
+                      onPressed: _timerSeconds == 0 && !busy ? _resend : null,
                       child: Text(
                         _timerSeconds == 0
                             ? 'Resend'

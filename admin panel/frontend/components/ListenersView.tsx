@@ -11,7 +11,7 @@ import { API_BASE, getHeaders } from '../lib/api';
 
 interface ListenersViewProps {
   onRefreshStats?: () => void;
-  subTab?: 'active' | 'pending' | 'suspended' | 'withdrawals' | 'performance';
+  subTab?: 'active' | 'pending' | 'suspended' | 'rejected' | 'withdrawals' | 'performance';
 }
 
 export default function ListenersView({ onRefreshStats, subTab = 'active' }: ListenersViewProps) {
@@ -59,7 +59,14 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
           ...rejectedData.map((c: any) => ({ ...c, status: 'rejected' }))
         ].map((c: any) => ({
           id: c.id,
-          name: c.name || c.user?.name || 'Unknown Host',
+          name:
+            c.fullName ||
+            c.full_name ||
+            c.name ||
+            c.user?.full_name ||
+            c.user?.fullName ||
+            c.user?.name ||
+            'Unknown Host',
           image: c.profile_image || c.user?.profile_image || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
           phone: c.phone || c.user?.phone || 'N/A',
           email: c.email || c.user?.email || 'N/A',

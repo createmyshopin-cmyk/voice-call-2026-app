@@ -3,7 +3,7 @@
 import { getToken, clearSession } from './auth';
 
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || 'https://backend-api-production-140f.up.railway.app/api';
+  process.env.NEXT_PUBLIC_API_URL || 'https://api.creomine.com/api';
 
 export function getHeaders(): Record<string, string> {
   if (typeof window === 'undefined') {

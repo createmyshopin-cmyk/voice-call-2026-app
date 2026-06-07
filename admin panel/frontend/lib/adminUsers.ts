@@ -17,6 +17,7 @@ export interface AdminUserListItem {
   onboardingCompleted: boolean;
   accountStatus: 'active' | 'blocked' | 'suspended';
   createdAt: string;
+  isCreator: boolean;
 }
 
 export interface AdminUsersListResponse {
@@ -40,6 +41,7 @@ export interface AdminUserDetail {
   onboardingCompleted: boolean;
   onlineStatus: OnlineStatus;
   isCreator: boolean;
+  creatorStatus: 'none' | 'active';
   isVerified: boolean;
   blocked: boolean;
   status: 'active' | 'blocked' | 'suspended';

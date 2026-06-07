@@ -53,7 +53,7 @@ class _ListenerApplicationScreenState extends State<ListenerApplicationScreen> {
       final auth = context.read<AuthProvider>();
       if (auth.user != null) {
         setState(() {
-          _nameController.text = auth.user!.fullName ?? auth.user!.name;
+          _nameController.text = auth.user!.displayName;
           _selectedAvatarUrl = auth.user!.avatarUrl ?? _sampleAvatars[0];
         });
       }

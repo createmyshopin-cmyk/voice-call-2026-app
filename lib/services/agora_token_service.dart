@@ -1,6 +1,6 @@
 import 'package:dio/dio.dart';
 
-import 'api_config.dart';
+import 'api_client.dart';
 
 /// Response from POST /api/agora/token — tokens are always issued by the backend.
 class AgoraTokenResponse {
@@ -24,13 +24,7 @@ class AgoraTokenResponse {
 class AgoraTokenService {
   final Dio _dio;
 
-  AgoraTokenService({Dio? dio})
-      : _dio = dio ??
-            Dio(BaseOptions(
-              baseUrl: apiBaseUrl,
-              connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 10),
-            ));
+  AgoraTokenService({Dio? dio}) : _dio = dio ?? apiDio;
 
   /// POST /api/agora/token
   Future<AgoraTokenResponse> fetchToken({

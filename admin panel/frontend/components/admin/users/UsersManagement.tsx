@@ -126,7 +126,7 @@ export default function UsersManagement({ embedded }: { embedded?: boolean }) {
             Users Management
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Onboarding profiles, wallet balances, and call activity.
+            Full names, creator roles, wallet balances, and call activity.
           </p>
         </div>
         <div className="text-xs text-muted-foreground font-medium">
@@ -197,12 +197,12 @@ export default function UsersManagement({ embedded }: { embedded?: boolean }) {
             }}
           />
           <FilterSelect
-            label="Listener Status"
+            label="Creator"
             value={isCreator ?? 'all'}
             options={[
-              { value: 'all', label: 'All' },
-              { value: 'listener', label: 'Listeners' },
-              { value: 'non_listener', label: 'Non-Listeners' },
+              { value: 'all', label: 'All users' },
+              { value: 'listener', label: 'Active creators' },
+              { value: 'non_listener', label: 'Users only' },
             ]}
             onChange={(v) => {
               setIsCreator(v as ListUsersParams['isCreator']);
@@ -222,11 +222,12 @@ export default function UsersManagement({ embedded }: { embedded?: boolean }) {
                   className="p-4 font-semibold cursor-pointer select-none"
                   onClick={() => toggleSort('fullName')}
                 >
-                  Name{sortIndicator('fullName')}
+                  Full Name{sortIndicator('fullName')}
                 </th>
-                <th className="p-4 font-semibold hidden sm:table-cell">Gender</th>
-                <th className="p-4 font-semibold hidden md:table-cell">Age</th>
-                <th className="p-4 font-semibold hidden lg:table-cell">Phone</th>
+                <th className="p-4 font-semibold hidden sm:table-cell">Role</th>
+                <th className="p-4 font-semibold hidden md:table-cell">Gender</th>
+                <th className="p-4 font-semibold hidden lg:table-cell">Age</th>
+                <th className="p-4 font-semibold hidden xl:table-cell">Phone</th>
                 <th
                   className="p-4 font-semibold text-right cursor-pointer select-none"
                   onClick={() => toggleSort('coins')}
@@ -252,13 +253,13 @@ export default function UsersManagement({ embedded }: { embedded?: boolean }) {
             <tbody className="divide-y divide-border/80">
               {loading ? (
                 <tr>
-                  <td colSpan={10}>
+                  <td colSpan={11}>
                     <TableSkeleton rows={6} />
                   </td>
                 </tr>
               ) : users.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="p-12 text-center">
+                  <td colSpan={11} className="p-12 text-center">
                     <Users
                       size={40}
                       className="mx-auto text-muted-foreground/40 mb-3"
@@ -283,18 +284,21 @@ export default function UsersManagement({ embedded }: { embedded?: boolean }) {
                     <td className="p-4">
                       <span className="font-semibold block">{user.fullName}</span>
                       {!user.onboardingCompleted && (
-                        <span className="text-[10px] text-amber-400 font-medium">
+                        <span className="text-[10px] text-amber-400 font-medium block mt-0.5">
                           Onboarding pending
                         </span>
                       )}
                     </td>
-                    <td className="p-4 hidden sm:table-cell text-muted-foreground">
-                      {user.gender ?? '—'}
+                    <td className="p-4 hidden sm:table-cell">
+                      <RoleBadge isCreator={user.isCreator} />
                     </td>
                     <td className="p-4 hidden md:table-cell text-muted-foreground">
+                      {user.gender ?? '—'}
+                    </td>
+                    <td className="p-4 hidden lg:table-cell text-muted-foreground">
                       {user.ageLabel ?? '—'}
                     </td>
-                    <td className="p-4 hidden lg:table-cell font-mono text-[11px] text-muted-foreground">
+                    <td className="p-4 hidden xl:table-cell font-mono text-[11px] text-muted-foreground">
                       {user.phone}
                     </td>
                     <td className="p-4 text-right font-semibold text-amber-400">
@@ -363,6 +367,21 @@ export default function UsersManagement({ embedded }: { embedded?: boolean }) {
         </button>
       )}
     </div>
+  );
+}
+
+function RoleBadge({ isCreator }: { isCreator: boolean }) {
+  if (isCreator) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30">
+        Active Creator
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-zinc-500/10 text-zinc-400 border border-zinc-500/20">
+      User
+    </span>
   );
 }
 

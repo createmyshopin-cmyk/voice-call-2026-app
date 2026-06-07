@@ -4,8 +4,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
+import '../utils/auth_navigation.dart';
 import '../utils/phone_utils.dart';
-import 'create_profile_screen.dart';
 import 'otp_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -49,21 +49,27 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (!mounted) return;
 
-      if (auth.hasFirebaseSession) {
-        Navigator.pushReplacement(
+      if (auth.isAuthenticated || auth.hasFirebaseSession) {
+        navigateAfterPhoneAuth(context, auth, source: 'login-auto');
+        return;
+      }
+
+      if (auth.hasVerificationInProgress) {
+        Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const CreateProfileScreen()),
+          MaterialPageRoute(
+            builder: (_) => OtpScreen(
+              phoneE164: e164,
+              phoneDisplay: formatPhoneForDisplay(e164),
+            ),
+          ),
         );
         return;
       }
 
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => OtpScreen(
-            phoneE164: e164,
-            phoneDisplay: formatPhoneForDisplay(e164),
-          ),
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not start verification. Please try again.'),
         ),
       );
     } on FormatException catch (e) {

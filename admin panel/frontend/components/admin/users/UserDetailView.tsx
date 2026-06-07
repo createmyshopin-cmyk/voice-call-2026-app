@@ -159,7 +159,7 @@ export default function UserDetailView({ userId }: UserDetailViewProps) {
               {user.isCreator && (
                 <Badge variant="purple">
                   <UserCheck size={11} className="inline mr-0.5" />
-                  Creator
+                  Active Creator
                 </Badge>
               )}
               {user.status === 'blocked' && (
@@ -261,8 +261,16 @@ export default function UserDetailView({ userId }: UserDetailViewProps) {
               value={`${user.walletBalance.toLocaleString()} coins`}
             />
             <DetailRow
-              label="Creator Status"
-              value={user.isCreator ? 'Yes' : 'No'}
+              label="Account Role"
+              value={user.isCreator ? 'Active Creator' : 'User'}
+            />
+            <DetailRow
+              label="Mobile App Mode"
+              value={
+                user.isCreator || user.creatorStatus === 'active'
+                  ? 'Creator mode — Start Earnings + Listener dashboard'
+                  : 'User mode — Become a Listener'
+              }
             />
             <DetailRow
               label="Verified"

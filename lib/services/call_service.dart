@@ -1,6 +1,6 @@
 import 'package:dio/dio.dart';
 import '../models/call_history_item.dart';
-import 'api_config.dart';
+import 'api_client.dart';
 
 /// Pending incoming call for a creator (GET /api/calls/requests/pending)
 class PendingCallRequest {
@@ -126,13 +126,7 @@ String _normalizeRequestStatus(String raw) {
 class CallService {
   final Dio _dio;
 
-  CallService({Dio? dio})
-      : _dio = dio ??
-            Dio(BaseOptions(
-              baseUrl: apiBaseUrl,
-              connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 10),
-            ));
+  CallService({Dio? dio}) : _dio = dio ?? apiDio;
 
   Map<String, String> _authHeaders(String accessToken) => {
         'Authorization': 'Bearer $accessToken',

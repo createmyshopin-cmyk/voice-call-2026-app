@@ -4,13 +4,18 @@ import 'api_client.dart';
 
 class CreatorsService {
   final Dio _dio;
+  final String _accessToken;
 
   CreatorsService({required String accessToken, Dio? dio})
-      : _dio = dio ?? createApiDio(accessToken: accessToken);
+      : _accessToken = accessToken,
+        _dio = dio ?? apiDio;
 
   /// GET /api/creators — requires user JWT (Firebase login).
   Future<List<Creator>> fetchActiveCreators() async {
-    final response = await _dio.get('/api/creators');
+    final response = await _dio.get(
+      '/api/creators',
+      options: authOptions(_accessToken),
+    );
     final data = response.data;
     if (data is! List) {
       throw DioException(
