@@ -625,6 +625,7 @@ class AuthProvider with ChangeNotifier {
   }
 
   Future<void> signOut() async {
+    await FCMService.shutdown();
     await _firebaseAuth.signOut();
     await SessionStorage.clearAccessToken();
     _user = null;

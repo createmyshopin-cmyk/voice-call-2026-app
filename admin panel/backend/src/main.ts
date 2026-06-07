@@ -7,8 +7,13 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Enable CORS for frontend connection
-  app.enableCors();
+  const isProd = process.env.NODE_ENV === 'production';
+  const corsOrigins = process.env.CORS_ORIGINS?.split(',').map((o) => o.trim()).filter(Boolean);
+  app.enableCors(
+    isProd && corsOrigins?.length
+      ? { origin: corsOrigins, credentials: true }
+      : undefined,
+  );
 
   // Prefix all routes with /api
   app.setGlobalPrefix('api');
@@ -24,8 +29,10 @@ async function bootstrap() {
     .addBearerAuth()
     .build();
   
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('docs', app, document);
+  if (!isProd || process.env.ENABLE_SWAGGER === 'true') {
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('docs', app, document);
+  }
 
   await app.listen(5000);
   console.log(`Application is running on: http://localhost:5000/api`);

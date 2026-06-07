@@ -1371,21 +1371,28 @@ class _CoinRechargeScreenState extends State<CoinRechargeScreen> {
       backgroundColor: Colors.transparent,
       isDismissible: true,
       enableDrag: true,
-      builder: (context) => _PaymentFlowSheet(package: package),
+      builder: (context) => RechargePaymentSheet(package: package),
     );
   }
 }
 
 // --- Payment flow: pay → Razorpay → green success (no method picker after pay) ---
-class _PaymentFlowSheet extends StatefulWidget {
+class RechargePaymentSheet extends StatefulWidget {
   final CoinPackage package;
-  const _PaymentFlowSheet({required this.package});
+  final bool inCallMode;
+
+  const RechargePaymentSheet({
+    super.key,
+    required this.package,
+    this.inCallMode = false,
+  });
 
   @override
-  State<_PaymentFlowSheet> createState() => _PaymentFlowSheetState();
+  State<RechargePaymentSheet> createState() => _RechargePaymentSheetState();
 }
 
-class _PaymentFlowSheetState extends State<_PaymentFlowSheet> with SingleTickerProviderStateMixin {
+class _RechargePaymentSheetState extends State<RechargePaymentSheet>
+    with SingleTickerProviderStateMixin {
   bool _isProcessing = false;
   bool _isSuccess = false;
   bool _razorpayOpen = false;
@@ -1465,18 +1472,10 @@ class _PaymentFlowSheetState extends State<_PaymentFlowSheet> with SingleTickerP
       }
       if (verifiedBalance != null) {
         wallet.setBalanceFromServer(verifiedBalance);
-      } else {
-        final payment = verifyData['payment'];
-        if (payment is Map) {
-          final added = payment['coinsAdded'] ?? payment['coins_added'];
-          if (added is num) {
-            wallet.setBalanceFromServer(wallet.balance + added.toInt());
-          }
-        }
       }
     }
 
-    // Confirm via /api/wallet (won't downgrade after postVerify — see WalletProvider).
+    // Server is source of truth — always confirm via /api/wallet after verify.
     await wallet.loadWallet(reason: 'postVerify', accessToken: token);
     await auth.refreshUser();
 
@@ -1492,6 +1491,20 @@ class _PaymentFlowSheetState extends State<_PaymentFlowSheet> with SingleTickerP
     if (!mounted) return;
 
     Navigator.pop(context);
+
+    if (widget.inCallMode) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '+${widget.package.coins} Coins Added — Continue Call',
+          ),
+          backgroundColor: const Color(0xFF00A86B),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(

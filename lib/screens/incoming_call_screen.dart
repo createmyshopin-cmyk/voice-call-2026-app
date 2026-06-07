@@ -142,6 +142,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
             agoraAppId: result.agoraAppId.isNotEmpty
                 ? result.agoraAppId
                 : widget.agoraAppId,
+            creatorId: context.read<AuthProvider>().user?.uid,
+            isCreatorRole: true,
           ),
         ),
       );

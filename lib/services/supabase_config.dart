@@ -22,9 +22,10 @@ class SupabaseConfig {
 
   static bool get isConfigured => url.isNotEmpty && anonKey.isNotEmpty;
 
+  static bool _didInitialize = false;
+
   static Future<void> initialize() async {
-    if (!isConfigured) return;
-    if (Supabase.instance.isInitialized) return;
+    if (!isConfigured || _didInitialize) return;
     await Supabase.initialize(
       url: url,
       anonKey: anonKey, // ignore: deprecated_member_use
@@ -32,7 +33,11 @@ class SupabaseConfig {
         logLevel: RealtimeLogLevel.info,
       ),
     );
+    _didInitialize = true;
   }
 
-  static SupabaseClient get client => Supabase.instance.client;
+  static SupabaseClient get client {
+    assert(_didInitialize, 'Call SupabaseConfig.initialize() first');
+    return Supabase.instance.client;
+  }
 }

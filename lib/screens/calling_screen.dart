@@ -10,8 +10,20 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/gift_catalog_provider.dart';
+import '../providers/gift_overlay_provider.dart';
+import '../providers/gift_provider.dart';
+import '../providers/recharge_prompt_provider.dart';
 import '../providers/wallet_provider.dart';
-import '../screens/recharge_screen.dart';
+import '../screens/call_summary_screen.dart';
+import '../services/gift_fcm_dispatcher.dart';
+import '../widgets/gifts/creator_gift_overlay.dart';
+import '../widgets/gifts/gift_bottom_sheet.dart';
+import '../config/gift_engagement_config.dart';
+import '../widgets/gifts/gift_animation_layer.dart';
+import '../widgets/gifts/in_call_recharge_sheet.dart';
+import '../widgets/gifts/premium_gift_animation.dart';
+import '../widgets/gifts/low_balance_widgets.dart';
 import '../services/agora_service.dart';
 import '../services/agora_token_service.dart';
 import '../services/call_service.dart';
@@ -26,6 +38,9 @@ class CallingScreen extends StatefulWidget {
   final String? callSessionId;
   final String? agoraToken;
   final String? agoraAppId;
+  final String? creatorId;
+  final bool isCreatorRole;
+  final int coinsPerMinute;
 
   const CallingScreen({
     super.key,
@@ -37,6 +52,9 @@ class CallingScreen extends StatefulWidget {
     this.callSessionId,
     this.agoraToken,
     this.agoraAppId,
+    this.creatorId,
+    this.isCreatorRole = false,
+    this.coinsPerMinute = 10,
   });
 
   @override
@@ -89,11 +107,8 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
   final List<String> _sentMessages = [];
   bool _showMessageOverlay = false;
 
-  bool _showGiftAnim = false;
-  String _currentGiftName = '';
-  String _currentGiftIcon = '';
-
   String _networkQuality = 'Good';
+  WalletProvider? _walletListener;
 
   bool get _hasActiveSession => _activeCallSessionId != null;
 
@@ -152,6 +167,59 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
     }
 
     _screenEntryController.forward();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _setupGiftSession();
+      _walletListener = context.read<WalletProvider>();
+      _walletListener!.addListener(_onWalletBalanceChanged);
+      _onWalletBalanceChanged();
+    });
+  }
+
+  void _onWalletBalanceChanged() {
+    if (!mounted) return;
+    final balance = context.read<WalletProvider>().balance;
+    context.read<RechargePromptProvider>().updateBalance(balance);
+  }
+
+  void _setupGiftSession() {
+    if (!mounted) return;
+    final auth = context.read<AuthProvider>();
+    final catalog = context.read<GiftCatalogProvider>();
+    final giftProvider = context.read<GiftProvider>();
+    final overlay = context.read<GiftOverlayProvider>();
+    final rechargePrompt = context.read<RechargePromptProvider>();
+
+    giftProvider.clearSession();
+    overlay.clear();
+    GiftFcmDispatcher.clearSession();
+    rechargePrompt.setCallContext(
+      coinsPerMinute: widget.coinsPerMinute,
+      peerName: widget.displayName ?? 'Creator',
+      sessionSeed: _activeCallSessionId ?? widget.channelName,
+    );
+    rechargePrompt.reset();
+
+    overlay.onGiftReplyToast = (creatorName, message) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$creatorName thanked you'),
+          backgroundColor: const Color(0xFFFF1493),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    };
+
+    if (auth.accessToken != null) {
+      catalog.ensureLoaded(auth.accessToken);
+    }
+  }
+
+  void _teardownGiftSession() {
+    if (!mounted) return;
+    context.read<GiftOverlayProvider>().onGiftReplyToast = null;
+    context.read<RechargePromptProvider>().reset();
   }
 
   @override
@@ -163,6 +231,8 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
     _breathingController.dispose();
     _waveformController.dispose();
     _screenEntryController.dispose();
+    _walletListener?.removeListener(_onWalletBalanceChanged);
+    _teardownGiftSession();
     _disposeAgora();
     super.dispose();
   }
@@ -447,7 +517,9 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
 
   void _startCallTimer() {
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
       setState(() => _seconds++);
+      context.read<RechargePromptProvider>().updateCallDuration(_seconds);
     });
   }
 
@@ -473,6 +545,7 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
 
     await _disposeAgora();
 
+    var callCoins = 0;
     if (sessionId != null && auth.accessToken != null) {
       try {
         final result = await _callService.endCall(
@@ -481,6 +554,7 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
           durationSeconds: _seconds,
           endedReason: endedReason,
         );
+        callCoins = result.coinsDeducted;
         debugPrint(
           'Call ended. Coins deducted: ${result.coinsDeducted}, New balance: ${result.newBalance}',
         );
@@ -495,7 +569,45 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
       }
     }
 
-    if (mounted) Navigator.pop(context);
+    if (!mounted) return;
+
+    final giftProvider = context.read<GiftProvider>();
+    final overlay = context.read<GiftOverlayProvider>();
+    final giftCoins = giftProvider.sessionGiftCoins;
+    final peerName = widget.displayName ?? 'Caller';
+
+    // coinsDeducted from end-call API is caller gross spend; creator earns ~60%.
+    final creatorCallEarnings = widget.isCreatorRole
+        ? (callCoins * 0.6).floor()
+        : null;
+    final creatorGiftEarnings =
+        widget.isCreatorRole ? overlay.sessionGiftEarnings : null;
+
+    giftProvider.clearSession();
+    overlay.clear();
+    context.read<RechargePromptProvider>().reset();
+    overlay.onGiftReplyToast = null;
+
+    await Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CallSummaryScreen(
+          peerName: peerName,
+          callDurationSeconds: _seconds,
+          callCoins: callCoins,
+          giftCoins: giftCoins,
+          totalCoins: callCoins + giftCoins,
+          isCreatorView: widget.isCreatorRole,
+          callEarnings: creatorCallEarnings,
+          giftEarnings: creatorGiftEarnings,
+          totalEarnings: widget.isCreatorRole
+              ? (creatorCallEarnings ?? 0) + (creatorGiftEarnings ?? 0)
+              : null,
+          giftsSent: giftProvider.sessionGifts,
+          giftsReceived: overlay.sessionReceived,
+        ),
+      ),
+    );
   }
 
   Future<void> _toggleMute() async {
@@ -548,250 +660,31 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
 
   String get _titleLabel => widget.displayName ?? 'Priya Sharma';
 
-  // Floating gift selection sheet
-  void _showGiftSelectionSheet(WalletProvider wallet) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(28),
-              topRight: Radius.circular(28),
-            ),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Gift a Smile',
-                    style: GoogleFonts.poppins(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: const Color(0xFF222222),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Color(0xFF777777)),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: _gifts.length,
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  mainAxisSpacing: 16,
-                  crossAxisSpacing: 16,
-                  childAspectRatio: 0.85,
-                ),
-                itemBuilder: (context, index) {
-                  final gift = _gifts[index];
-                  return InkWell(
-                    onTap: () => _sendGift(gift, wallet),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFF0F5),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: const Color(0xFFFF1493).withOpacity(0.12),
-                          width: 1,
-                        ),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(gift.icon, style: const TextStyle(fontSize: 34)),
-                          const SizedBox(height: 8),
-                          Text(
-                            gift.name,
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: const Color(0xFF333333),
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFF1493),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              '${gift.price} C',
-                              style: GoogleFonts.poppins(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(height: 16),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _sendGift(GiftItem gift, WalletProvider wallet) {
-    if (wallet.balance < gift.price) {
-      Navigator.pop(context);
-      _showInsufficientCoinsSheet(gift.price);
+  void _openGiftSheet() {
+    final sessionId = _activeCallSessionId;
+    final creatorId = widget.creatorId;
+    if (sessionId == null || creatorId == null || creatorId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Gifts are available once the call is connected.'),
+        ),
+      );
       return;
     }
+    if (widget.isCreatorRole) return;
 
-    wallet.setBalanceFromServer(wallet.balance - gift.price);
-    Navigator.pop(context);
-
-    setState(() {
-      _currentGiftName = gift.name;
-      _currentGiftIcon = gift.icon;
-      _showGiftAnim = true;
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Text(gift.icon, style: const TextStyle(fontSize: 20)),
-            const SizedBox(width: 8),
-            Text('Sent ${gift.name} to Priya Sharma!'),
-          ],
-        ),
-        backgroundColor: const Color(0xFFFF1493),
-        duration: const Duration(seconds: 2),
-      ),
+    GiftBottomSheet.show(
+      context,
+      creatorId: creatorId,
+      callId: sessionId,
+      onInsufficientBalance: () => _showInCallRecharge(),
     );
-
-    Future.delayed(const Duration(milliseconds: 2500), () {
-      if (mounted) {
-        setState(() {
-          _showGiftAnim = false;
-        });
-      }
-    });
   }
 
-  void _showInsufficientCoinsSheet(int requiredCoins) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(24),
-              topRight: Radius.circular(24),
-            ),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 30),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFF1493).withOpacity(0.08),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.monetization_on,
-                  color: Color(0xFFFF1493),
-                  size: 44,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Insufficient Coins',
-                style: GoogleFonts.poppins(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: const Color(0xFF333333),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'You need at least $requiredCoins Coins to send this gift.',
-                textAlign: TextAlign.center,
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  color: const Color(0xFF666666),
-                ),
-              ),
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      child: Text(
-                        'Cancel',
-                        style: GoogleFonts.poppins(
-                          color: const Color(0xFF666666),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const CoinRechargeScreen(),
-                          ),
-                        );
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFFF1493),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      child: Text(
-                        'Recharge Now',
-                        style: GoogleFonts.poppins(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
+  void _showInCallRecharge() {
+    InCallRechargeSheet.show(
+      context,
+      coinsPerMinute: widget.coinsPerMinute,
     );
   }
 
@@ -924,6 +817,7 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
   @override
   Widget build(BuildContext context) {
     final wallet = context.watch<WalletProvider>();
+    context.watch<RechargePromptProvider>();
 
     return Scaffold(
       backgroundColor: const Color(0xFF080E1A),
@@ -998,6 +892,9 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
                     ),
                   ),
 
+                  if (!_isRinging && _isJoined && !widget.isCreatorRole)
+                    LowBalanceBanner(onTopUp: _showInCallRecharge),
+
                   const SizedBox(height: 16),
 
                   // Middle layout: profile, duration, badges
@@ -1059,33 +956,83 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
                     child: _buildCallControlsRow(),
                   ),
 
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
 
-                  // Gift Section Panel
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, 1.0),
-                        end: Offset.zero,
-                      ).animate(CurvedAnimation(
-                        parent: _screenEntryController,
-                        curve: const Interval(0.3, 1.0, curve: Curves.easeOutCubic),
-                      )),
-                      child: _buildGiftSectionCard(wallet),
-                    ),
-                  ),
+                  if (!_isRinging && _isJoined && !widget.isCreatorRole)
+                    LowBalanceStickyCard(onTopUp: _showInCallRecharge),
+
+                  const SizedBox(height: 16),
                 ],
               ),
             ),
           ),
 
+          // Gift button — bottom right (caller only)
+          if (!_isRinging && _isJoined && !widget.isCreatorRole)
+            Positioned(
+              right: 20,
+              bottom: 100,
+              child: ScalePressedButton(
+                onTap: _openGiftSheet,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFFF1493), Color(0xFFFF4DA6)],
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFFF1493).withOpacity(0.4),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      alignment: Alignment.center,
+                      child: const Text('🎁', style: TextStyle(fontSize: 24)),
+                    ),
+                    const GiftMicroParticleBurst(),
+                    const GiftStreakBadge(),
+                    const GiftComboBadge(),
+                  ],
+                ),
+              ),
+            ),
+
           // Quick messages overlay
           if (_showMessageOverlay) _buildInCallChatTray(),
           if (_sentMessages.isNotEmpty) _buildFloatingSentTextOverlay(),
 
-          // Sent Gift Particle / Float Animation Overlay
-          if (_showGiftAnim) _buildGiftAnimationOverlay(),
+          const GiftAnimationLayer(),
+          const GiftMilestoneToast(),
+
+          if (widget.isCreatorRole) ...[
+            Consumer<GiftOverlayProvider>(
+              builder: (context, overlay, _) {
+                final event = overlay.current;
+                if (event == null ||
+                    !GiftEngagementConfig.enablePremiumAnimations ||
+                    !event.isPremiumGift) {
+                  return const SizedBox.shrink();
+                }
+                return Positioned.fill(
+                  child: IgnorePointer(
+                    child: PremiumGiftAnimation(
+                      animationKey: event.animationKey,
+                      emoji: event.giftEmoji,
+                      giftName: event.giftName,
+                    ),
+                  ),
+                );
+              },
+            ),
+            const CreatorGiftOverlay(),
+          ],
         ],
       ),
     );
@@ -1450,7 +1397,7 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '₹18 / min',
+                    '${widget.coinsPerMinute} Coins / min',
                     style: GoogleFonts.poppins(
                       color: const Color(0xFFFF1493),
                       fontWeight: FontWeight.bold,
@@ -1578,95 +1525,6 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
     );
   }
 
-  Widget _buildGiftSectionCard(WalletProvider wallet) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          // Gift Box Icon Circle
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF0F5),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.card_giftcard_rounded,
-              color: Color(0xFFFF1493),
-              size: 26,
-            ),
-          ),
-          const SizedBox(width: 14),
-          // Texts
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Gift a Smile',
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: const Color(0xFF222222),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Send a gift and make their day!',
-                  style: GoogleFonts.poppins(
-                    fontSize: 11,
-                    color: const Color(0xFF777777),
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          // Action button
-          ScalePressedButton(
-            onTap: () => _showGiftSelectionSheet(wallet),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: const Color(0xFFFF1493),
-                  width: 1.5,
-                ),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.send_rounded, color: Color(0xFFFF1493), size: 12),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Send Gift',
-                    style: GoogleFonts.poppins(
-                      color: const Color(0xFFFF1493),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildLocalCameraFloatingCard() {
     return Positioned(
       right: _localCardX,
@@ -1704,59 +1562,6 @@ class _CallingScreenState extends State<CallingScreen> with TickerProviderStateM
                   )
                 : const Center(child: Icon(Icons.videocam_off, color: Colors.white24)),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGiftAnimationOverlay() {
-    return Positioned.fill(
-      child: IgnorePointer(
-        child: TweenAnimationBuilder<double>(
-          tween: Tween<double>(begin: 0.0, end: 1.0),
-          duration: const Duration(milliseconds: 2000),
-          builder: (context, val, child) {
-            final opacity = val < 0.2 ? val / 0.2 : (val > 0.8 ? (1.0 - val) / 0.2 : 1.0);
-            final scale = 0.5 + 1.5 * val;
-            final yOffset = -300 * val;
-
-            return Center(
-              child: Transform.translate(
-                offset: Offset(0, yOffset),
-                child: Transform.scale(
-                  scale: scale,
-                  child: Opacity(
-                    opacity: opacity.clamp(0.0, 1.0),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          _currentGiftIcon,
-                          style: const TextStyle(fontSize: 80),
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFF1493).withOpacity(0.9),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            'Sent $_currentGiftName!',
-                            style: GoogleFonts.poppins(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
         ),
       ),
     );
@@ -2071,19 +1876,3 @@ class _ScalePressedButtonState extends State<ScalePressedButton> with SingleTick
   }
 }
 
-class GiftItem {
-  final String icon;
-  final String name;
-  final int price;
-
-  const GiftItem({required this.icon, required this.name, required this.price});
-}
-
-final List<GiftItem> _gifts = const [
-  GiftItem(icon: '🌟', name: 'Super Star', price: 50),
-  GiftItem(icon: '🎈', name: 'Love Balloon', price: 100),
-  GiftItem(icon: '🌹', name: 'Sweet Rose', price: 200),
-  GiftItem(icon: '👑', name: 'Shiny Crown', price: 500),
-  GiftItem(icon: '💎', name: 'Magic Diamond', price: 1000),
-  GiftItem(icon: '🏰', name: 'Fantasy Castle', price: 5000),
-];

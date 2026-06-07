@@ -140,8 +140,11 @@ export class PaymentsController {
   @ApiResponse({ status: 400, description: 'Invalid signature or missing parameters.' })
   @ApiResponse({ status: 404, description: 'Payment record not found.' })
   @ApiResponse({ status: 409, description: 'Duplicate verify call — coins already credited.' })
-  verify(@Body() dto: VerifyPaymentDto) {
-    return this.paymentsService.verifyPayment(dto);
+  verify(
+    @Request() req: { user: { id: string } },
+    @Body() dto: VerifyPaymentDto,
+  ) {
+    return this.paymentsService.verifyPayment(req.user.id, dto);
   }
 
   // ── Admin operations ────────────────────────────────────────────────────────

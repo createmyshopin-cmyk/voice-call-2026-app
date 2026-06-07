@@ -11,6 +11,7 @@ import '../providers/wallet_provider.dart';
 import '../providers/call_history_provider.dart';
 import '../utils/home_responsive.dart';
 import '../widgets/common/app_shimmer.dart';
+import '../widgets/gifts/gift_history_sheet.dart';
 import 'recharge_screen.dart' hide ScalePressedButton;
 import 'listener_application_screen.dart';
 import 'listener_dashboard_screen.dart' hide ScalePressedButton;
@@ -853,7 +854,7 @@ class _ProfileScreenState extends State<ProfileScreen> with AutomaticKeepAliveCl
             icon: Icons.card_giftcard_rounded,
             title: 'Gift History',
             subtitle: 'View gifts you\'ve sent',
-            onTap: () => _showGiftHistoryBottomSheet(context),
+            onTap: () => GiftHistorySheet.show(context),
           ),
           _buildMenuDivider(),
           _buildMenuItem(

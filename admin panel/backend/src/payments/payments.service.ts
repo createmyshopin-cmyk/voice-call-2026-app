@@ -4,6 +4,7 @@ import {
   BadRequestException,
   InternalServerErrorException,
   ConflictException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { CoinTransactionsService } from '../calls/coin-transactions.service';
@@ -366,11 +367,18 @@ export class PaymentsService {
 
   // ── Verify payment & credit coins ──────────────────────────────────────────
 
-  async verifyPayment(dto: VerifyPaymentDto) {
-    // ── Branch A: App-internal / mock checkout (no Razorpay signature) ────────
-    // Used by dev mode or admin "manually complete" flows.
+  async verifyPayment(userId: string, dto: VerifyPaymentDto) {
+    // ── Branch A: Dev-only mock checkout (no Razorpay signature) ─────────────
+    const allowMock =
+      process.env.ALLOW_MOCK_PAYMENTS === 'true' &&
+      process.env.NODE_ENV !== 'production';
     if (dto.paymentId && dto.transactionId && !dto.razorpaySignature) {
-      return this.completePendingPayment(dto.paymentId, dto.transactionId);
+      if (!allowMock) {
+        throw new BadRequestException(
+          'Mock payment verification is disabled. Provide Razorpay signature parameters.',
+        );
+      }
+      return this.completePendingPayment(userId, dto.paymentId, dto.transactionId);
     }
 
     // ── Branch B: Full Razorpay signature verification ────────────────────────
@@ -398,11 +406,19 @@ export class PaymentsService {
 
     // 2. Look up the pending payment by gateway_order_id
     if (this.supabase.isConfigured) {
-      return this.verifyPaymentInDb(dto.razorpayOrderId, dto.razorpayPaymentId);
+      return this.verifyPaymentInDb(
+        userId,
+        dto.razorpayOrderId,
+        dto.razorpayPaymentId,
+      );
     }
 
     // 2b. In-memory fallback
-    return this.verifyPaymentInMemory(dto.razorpayOrderId, dto.razorpayPaymentId);
+    return this.verifyPaymentInMemory(
+      userId,
+      dto.razorpayOrderId,
+      dto.razorpayPaymentId,
+    );
   }
 
   /**
@@ -411,6 +427,7 @@ export class PaymentsService {
    * double-credits: if two concurrent verify calls race, only one INSERT wins.
    */
   private async verifyPaymentInDb(
+    userId: string,
     razorpayOrderId:   string,
     razorpayPaymentId: string,
   ) {
@@ -425,6 +442,10 @@ export class PaymentsService {
 
     if (fetchErr || !paymentRow) {
       throw new NotFoundException(`No payment record found for order ${razorpayOrderId}`);
+    }
+
+    if (paymentRow.user_id !== userId) {
+      throw new ForbiddenException('Payment does not belong to the authenticated user');
     }
 
     // 2b. Idempotency: already succeeded with same payment ID → return cached result
@@ -446,21 +467,26 @@ export class PaymentsService {
     // 2d. Atomically mark as success + store Razorpay payment ID.
     //     The UNIQUE index on gateway_payment_id prevents a second concurrent
     //     verify from setting it again — only one UPDATE wins.
-    const { error: updateErr } = await client
+    const { data: updatedRows, error: updateErr } = await client
       .from('payments')
       .update({
         status:             'success',
         gateway_payment_id: razorpayPaymentId,
       })
       .eq('id', paymentRow.id as string)
-      .eq('status', 'pending'); // CAS: only update if still pending
+      .eq('status', 'pending')
+      .eq('user_id', userId)
+      .select('id');
 
     if (updateErr) {
-      // Could be the UNIQUE constraint firing on a concurrent retry — safe to treat as duplicate
-      if ((updateErr as any).code === '23505') {
+      if ((updateErr as { code?: string }).code === '23505') {
         throw new ConflictException('Duplicate payment verification detected — coins already credited');
       }
       throw new InternalServerErrorException(`Failed to update payment status: ${updateErr.message}`);
+    }
+
+    if (!updatedRows?.length) {
+      throw new ConflictException('Payment already processed by another request');
     }
 
     // 2e. Credit coins — done AFTER status update to prevent partial state
@@ -484,9 +510,16 @@ export class PaymentsService {
     return this.buildSuccessResponse(paymentRow, razorpayPaymentId, updatedUser.coins);
   }
 
-  private async verifyPaymentInMemory(gatewayOrderId: string, gatewayPaymentId: string) {
+  private async verifyPaymentInMemory(
+    userId: string,
+    gatewayOrderId: string,
+    gatewayPaymentId: string,
+  ) {
     const payment = this.memPayments.find(p => p.gatewayOrderId === gatewayOrderId);
     if (!payment) throw new NotFoundException(`No payment record for order ${gatewayOrderId}`);
+    if (payment.userId !== userId) {
+      throw new ForbiddenException('Payment does not belong to the authenticated user');
+    }
 
     if (payment.status === 'success' && payment.gatewayPaymentId === gatewayPaymentId) {
       const user = await this.usersService.findOne(payment.userId);
@@ -517,7 +550,11 @@ export class PaymentsService {
 
   // ── Complete pending payment (mobile mock / admin) ──────────────────────────
 
-  private async completePendingPayment(paymentId: string, transactionId: string) {
+  private async completePendingPayment(
+    userId: string,
+    paymentId: string,
+    transactionId: string,
+  ) {
     if (this.supabase.isConfigured) {
       const client = this.supabase.getClient();
 
@@ -528,24 +565,34 @@ export class PaymentsService {
         .single();
 
       if (error || !data) throw new NotFoundException(`Payment record ${paymentId} not found`);
+      if (data.user_id !== userId) {
+        throw new ForbiddenException('Payment does not belong to the authenticated user');
+      }
       if (data.status !== 'pending') {
         throw new BadRequestException(`Payment already processed (status: ${data.status as string})`);
       }
 
-      const userId     = data.user_id as string;
+      const paymentUserId = data.user_id as string;
       const coinsAdded = Number(data.coins_added);
 
-      const user        = await this.usersService.findOne(userId);
+      const user        = await this.usersService.findOne(paymentUserId);
       const balanceBefore = user.coins;
-      const updatedUser = await this.usersService.updateCoins(userId, coinsAdded);
+      const updatedUser = await this.usersService.updateCoins(paymentUserId, coinsAdded);
 
-      await client
+      const { data: updatedRows } = await client
         .from('payments')
         .update({ status: 'success', gateway_payment_id: transactionId })
-        .eq('id', paymentId);
+        .eq('id', paymentId)
+        .eq('status', 'pending')
+        .eq('user_id', userId)
+        .select('id');
+
+      if (!updatedRows?.length) {
+        throw new ConflictException('Payment already processed by another request');
+      }
 
       await this.coinTransactions.recordRecharge({
-        userId,
+        userId: paymentUserId,
         coinsAdded,
         balanceBefore,
         balanceAfter: updatedUser.coins,
@@ -559,6 +606,9 @@ export class PaymentsService {
     // In-memory path
     const payment = this.memPayments.find(p => p.id === paymentId);
     if (!payment) throw new NotFoundException(`Payment record ${paymentId} not found`);
+    if (payment.userId !== userId) {
+      throw new ForbiddenException('Payment does not belong to the authenticated user');
+    }
     if (payment.status !== 'pending') {
       throw new BadRequestException(`Payment already processed (status: ${payment.status})`);
     }

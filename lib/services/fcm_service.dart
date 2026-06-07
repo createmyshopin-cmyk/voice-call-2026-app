@@ -5,13 +5,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import '../screens/incoming_call_screen.dart';
 import 'api_client.dart';
+import 'gift_fcm_dispatcher.dart';
 import 'incoming_call_coordinator.dart';
 
 /// Top-level background handler — must be a top-level function, not a method.
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // System automatically shows the notification from the FCM payload.
-  // Nothing else needed here; tap handling is done in onMessageOpenedApp.
+  // When the FCM payload includes a `notification` block, Android/iOS show
+  // the system notification automatically in background/terminated states.
+  // Data is available here for dedup/logging; UI dispatch happens on app resume.
+  final type = message.data['type']?.toString();
+  if (type == 'gift_received' || type == 'gift_reply') {
+    debugPrint('[FCM:bg] gift event type=$type id=${message.data['giftTransactionId']}');
+  }
 }
 
 class FCMService {
@@ -25,9 +31,13 @@ class FCMService {
   static bool _handlersRegistered = false;
   static StreamSubscription<RemoteMessage>? _onMessageSub;
   static StreamSubscription<RemoteMessage>? _onOpenedSub;
+  static StreamSubscription<String>? _tokenRefreshSub;
+  static String? _lastAccessToken;
 
   /// Call once after the user logs in and accessToken is available.
   static Future<void> initialize(String accessToken) async {
+    _lastAccessToken = accessToken;
+
     await _messaging.requestPermission(
       alert: true,
       badge: true,
@@ -39,8 +49,12 @@ class FCMService {
       await _registerToken(token, accessToken);
     }
 
-    _messaging.onTokenRefresh.listen((newToken) {
-      _registerToken(newToken, accessToken);
+    await _tokenRefreshSub?.cancel();
+    _tokenRefreshSub = _messaging.onTokenRefresh.listen((newToken) {
+      final auth = _lastAccessToken;
+      if (auth != null) {
+        _registerToken(newToken, auth);
+      }
     });
 
     if (!_handlersRegistered) {
@@ -58,6 +72,17 @@ class FCMService {
     }
   }
 
+  static Future<void> shutdown() async {
+    await _onMessageSub?.cancel();
+    await _onOpenedSub?.cancel();
+    await _tokenRefreshSub?.cancel();
+    _onMessageSub = null;
+    _onOpenedSub = null;
+    _tokenRefreshSub = null;
+    _handlersRegistered = false;
+    _lastAccessToken = null;
+  }
+
   static Future<void> _registerToken(
       String fcmToken, String accessToken) async {
     try {
@@ -73,9 +98,13 @@ class FCMService {
   }
 
   static void _handleMessage(RemoteMessage message) {
-    if (message.data['type'] != 'incoming_call') return;
-
     final data = message.data;
+
+    if (GiftFcmDispatcher.dispatch(data)) {
+      return;
+    }
+
+    if (data['type'] != 'incoming_call') return;
     final callRequestId =
         data['callRequestId']?.toString() ?? data['callSessionId']?.toString() ?? '';
 

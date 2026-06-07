@@ -718,7 +718,13 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       return;
     }
-    _initiateCall(creator.id, creator.name, creator.avatar, isVideo);
+    _initiateCall(
+      creator.id,
+      creator.name,
+      creator.avatar,
+      isVideo,
+      coinsPerMinute: creator.ratePerMinute,
+    );
   }
 
   void _showCreatorProfile(Creator creator) {
@@ -834,8 +840,9 @@ class _HomeScreenState extends State<HomeScreen> {
     String listenerId,
     String name,
     String avatarUrl,
-    bool isVideoCall,
-  ) async {
+    bool isVideoCall, {
+    int coinsPerMinute = 10,
+  }) async {
     final auth = Provider.of<AuthProvider>(context, listen: false);
     final coinProvider = Provider.of<WalletProvider>(context, listen: false);
     final accessToken = auth.accessToken;
@@ -901,6 +908,8 @@ class _HomeScreenState extends State<HomeScreen> {
               callSessionId: result.callSessionId,
               agoraToken: result.agoraToken,
               agoraAppId: result.agoraAppId,
+              creatorId: listenerId,
+              coinsPerMinute: coinsPerMinute,
             ),
           ),
         );

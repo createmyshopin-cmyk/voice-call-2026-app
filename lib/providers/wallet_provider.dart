@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import '../models/wallet_transaction.dart';
 import '../services/api_client.dart' show apiDio, authOptions;
 
+/// Server-authoritative wallet state. Client never invents balance changes.
 class WalletProvider with ChangeNotifier {
   int _balance = 0;
   String? _userId;
@@ -28,13 +29,7 @@ class WalletProvider with ChangeNotifier {
     return null;
   }
 
-  void _writeBalance(String source, int value, {bool allowDecrease = true}) {
-    if (!allowDecrease && value < _balance) {
-      debugPrint(
-        '[WalletProvider] $source ignored stale $value (keeping $_balance)',
-      );
-      return;
-    }
+  void _writeBalance(String source, int value) {
     debugPrint(
       '[WalletProvider] $source => balance $_balance -> $value',
     );
@@ -65,7 +60,9 @@ class WalletProvider with ChangeNotifier {
 
     if (userChanged) {
       _currentUserId = userId;
-      _writeBalance('updateAuth:userChanged', initialCoins ?? 0);
+      if (initialCoins != null) {
+        _writeBalance('updateAuth:userChanged', initialCoins);
+      }
       loadWallet(reason: 'login');
       return;
     }
@@ -79,11 +76,6 @@ class WalletProvider with ChangeNotifier {
       '[WalletProvider] updateAuth skipped balance reload '
       '(auth profile refresh only — wallet balance preserved)',
     );
-  }
-
-  /// Sync balance from profile without a network round-trip.
-  void setBalance(int coins) {
-    _writeBalance('setBalance', coins);
   }
 
   Future<void> loadWallet({
@@ -112,15 +104,9 @@ class WalletProvider with ChangeNotifier {
             _parseBalance(data['coin_balance']) ??
             0;
         debugPrint(
-          '[WalletProvider] loadWallet:$reason => server balance=$serverBalance '
-          'raw=$data',
+          '[WalletProvider] loadWallet:$reason => server balance=$serverBalance',
         );
-        final allowDecrease = reason == 'login' || reason == 'tokenRefresh';
-        _writeBalance(
-          'loadWallet:$reason',
-          serverBalance,
-          allowDecrease: allowDecrease,
-        );
+        _writeBalance('loadWallet:$reason', serverBalance);
       }
     } catch (e) {
       debugPrint('[WalletProvider] loadWallet:$reason error: $e');
@@ -158,64 +144,12 @@ class WalletProvider with ChangeNotifier {
     }
   }
 
-  Future<bool> deductCoins(int amount, {bool localOnly = false}) async {
-    if (_balance < amount) return false;
-    if (localOnly || _userId == null) {
-      _writeBalance('deductCoins:local', _balance - amount);
-      return true;
-    }
-    try {
-      final token = _accessToken;
-      if (token == null) return false;
-      final response = await _dio.post(
-        '/api/wallets/adjust',
-        data: {
-          'userId': _userId,
-          'amount': -amount,
-          'reason': 'User coin deduction',
-        },
-        options: authOptions(token),
-      );
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        await loadWallet(reason: 'deductCoins');
-        return true;
-      }
-    } catch (e) {
-      debugPrint('Backend coin deduction error: $e');
-      _writeBalance('deductCoins:fallback', _balance - amount);
-      return true;
-    }
-    return false;
-  }
-
-  Future<void> addCoins(int amount) async {
-    if (_userId == null) {
-      _writeBalance('addCoins:local', _balance + amount);
-      return;
-    }
-    try {
-      final token = _accessToken;
-      if (token == null) return;
-      final response = await _dio.post(
-        '/api/wallets/adjust',
-        data: {
-          'userId': _userId,
-          'amount': amount,
-          'reason': 'User recharge package',
-        },
-        options: authOptions(token),
-      );
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        await loadWallet(reason: 'addCoins');
-      }
-    } catch (e) {
-      debugPrint('Backend coin adjust error: $e');
-      _writeBalance('addCoins:fallback', _balance + amount);
-    }
-  }
-
-  /// Authoritative balance from verify RPC or end-call response.
+  /// Authoritative balance from gift send, recharge verify, or end-call API.
   void setBalanceFromServer(int newBalance) {
     _writeBalance('setBalanceFromServer', newBalance);
   }
+
+  /// Refresh balance from server — use after any financial operation.
+  Future<void> refreshFromServer({String reason = 'refresh'}) =>
+      loadWallet(reason: reason);
 }

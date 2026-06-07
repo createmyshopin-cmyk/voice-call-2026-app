@@ -13,7 +13,11 @@ import 'providers/wallet_provider.dart';
 import 'providers/creator_provider.dart';
 import 'providers/creator_heartbeat_provider.dart';
 import 'providers/call_history_provider.dart';
+import 'providers/gift_catalog_provider.dart';
+import 'providers/gift_overlay_provider.dart';
+import 'providers/gift_provider.dart';
 import 'providers/network_provider.dart';
+import 'providers/recharge_prompt_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/create_profile_screen.dart';
@@ -82,6 +86,18 @@ void main() async {
           create: (_) => CallHistoryProvider(),
           update: (_, auth, history) =>
               history!..onAuthChanged(auth.accessToken),
+        ),
+
+        ChangeNotifierProvider(create: (_) => GiftProvider()),
+        ChangeNotifierProvider(create: (_) => GiftOverlayProvider()),
+        ChangeNotifierProvider(create: (_) => RechargePromptProvider()),
+
+        ChangeNotifierProxyProvider<AuthProvider, GiftCatalogProvider>(
+          create: (_) => GiftCatalogProvider(),
+          update: (_, auth, catalog) {
+            catalog!.ensureLoaded(auth.accessToken);
+            return catalog;
+          },
         ),
       ],
       child: const AppLifecycleHandler(child: MyApp()),

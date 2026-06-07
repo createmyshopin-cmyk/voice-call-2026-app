@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import '../config/gift_engagement_config.dart';
 import '../providers/auth_provider.dart';
 import '../providers/creator_heartbeat_provider.dart';
 import '../providers/call_history_provider.dart';
@@ -14,6 +15,8 @@ import '../core/network/api_exception.dart';
 import '../utils/api_error_message.dart';
 import '../services/payout_service.dart';
 import '../services/creator_stats_service.dart';
+import '../services/creator_gift_service.dart';
+import '../widgets/listener/todays_gifts_card.dart';
 import 'call_details_screen.dart';
 import 'calling_screen.dart';
 import '../widgets/call_history_card.dart';
@@ -46,6 +49,13 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
   int _totalTalkMinutes = 0;
   String _pickedRateLabel = '—';
 
+  final CreatorGiftService _creatorGiftService = CreatorGiftService();
+  CreatorGiftInsights _todayGiftInsights = const CreatorGiftInsights(
+    giftsReceived: 0,
+    giftCoins: 0,
+  );
+  bool _loadingGiftInsights = false;
+
   NetworkProvider? _networkProvider;
 
   @override
@@ -53,6 +63,7 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
     super.initState();
     _loadPayoutData();
     _loadEarningsStats();
+    _loadGiftInsights();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _networkProvider = context.read<NetworkProvider>();
@@ -78,6 +89,37 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
       await _pollPendingRequests();
     }
     await _loadPayoutData();
+    await _loadGiftInsights();
+  }
+
+  Future<void> _loadGiftInsights() async {
+    final token = context.read<AuthProvider>().accessToken;
+    if (token == null) return;
+
+    setState(() => _loadingGiftInsights = true);
+    try {
+      final stats = await _creatorGiftService.fetchStats(token);
+      final recent = await _creatorGiftService.fetchRecent(token);
+      final insights = _creatorGiftService.aggregateToday(recent);
+      if (mounted) {
+        setState(() {
+          _todayGiftInsights = CreatorGiftInsights(
+            giftsReceived: stats.todayGifts > 0
+                ? stats.todayGifts
+                : insights.giftsReceived,
+            giftCoins: insights.giftCoins > 0
+                ? insights.giftCoins
+                : stats.totalGiftCoins,
+            topGiftName: insights.topGiftName,
+            mostActiveSender: insights.mostActiveSender,
+          );
+          _loadingGiftInsights = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Gift insights load error: $e');
+      if (mounted) setState(() => _loadingGiftInsights = false);
+    }
   }
 
   Future<void> _loadEarningsStats() async {
@@ -280,6 +322,8 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
                     callSessionId: accepted.callSessionId,
                     agoraToken: accepted.agoraToken,
                     agoraAppId: accepted.agoraAppId,
+                    creatorId: context.read<AuthProvider>().user?.uid,
+                    isCreatorRole: true,
                   ),
                 ),
               );
@@ -575,6 +619,13 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
               ],
             ),
           ),
+          if (GiftEngagementConfig.enableCreatorInsights) ...[
+            const SizedBox(height: 20),
+            TodaysGiftsCard(
+              insights: _todayGiftInsights,
+              isLoading: _loadingGiftInsights,
+            ),
+          ],
           const SizedBox(height: 28),
 
           // Custom Bar chart

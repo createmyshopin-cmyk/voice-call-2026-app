@@ -11,6 +11,7 @@ import { AdminModule } from './admin/admin.module';
 import { AgoraModule } from './agora/agora.module';
 import { FinanceModule } from './admin/finance/finance.module';
 import { AdminUsersModule } from './admin/users/admin-users.module';
+import { GiftModule } from './gifts/gift.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { AdminUsersModule } from './admin/users/admin-users.module';
     AdminModule,
     FinanceModule,
     AdminUsersModule,
+    GiftModule,
   ],
 })
 export class AppModule {}
