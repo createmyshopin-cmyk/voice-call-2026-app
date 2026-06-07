@@ -41,12 +41,17 @@ class CreatorHeartbeatProvider with ChangeNotifier {
 
   /// Called when app is backgrounded/closed — mark offline on server.
   Future<void> goOfflineOnBackground() async {
+    await goOfflineAndWait(silent: true);
+  }
+
+  /// Awaitable offline toggle for navigation unlock flows.
+  Future<void> goOfflineAndWait({bool silent = false}) async {
     if (!_isActive) return;
     _timer?.cancel();
     _timer = null;
     _isActive = false;
-    await _goOffline(silent: true);
     notifyListeners();
+    await _goOffline(silent: silent);
   }
 
   Future<void> _goOnline() async {

@@ -28,8 +28,8 @@ class ListenerDashboardScreen extends StatefulWidget {
 
 class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
   int _activeTab = 0; // 0: Earnings, 1: Payout, 2: History, 3: Reports
-  bool _isOnline = false;
   Timer? _pendingPollTimer;
+  CreatorHeartbeatProvider? _heartbeat;
   bool _incomingDialogOpen = false;
   final CallService _callService = CallService();
   double _withdrawableBalance = 0.00;
@@ -57,12 +57,24 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
       if (!mounted) return;
       _networkProvider = context.read<NetworkProvider>();
       _networkProvider!.registerRecoveryCallback(_onNetworkRecovery);
+      _heartbeat = context.read<CreatorHeartbeatProvider>();
+      _heartbeat!.addListener(_onHeartbeatChanged);
+      _syncIncomingCallPolling(_heartbeat!.isActive, showFeedback: false);
     });
+  }
+
+  bool get _isOnline => context.watch<CreatorHeartbeatProvider>().isActive;
+
+  void _onHeartbeatChanged() {
+    if (!mounted) return;
+    final isOnline = _heartbeat?.isActive ?? false;
+    setState(() {});
+    _syncIncomingCallPolling(isOnline, showFeedback: false);
   }
 
   Future<void> _onNetworkRecovery() async {
     if (!mounted) return;
-    if (_isOnline) {
+    if (_heartbeat?.isActive ?? false) {
       await _pollPendingRequests();
     }
     await _loadPayoutData();
@@ -146,37 +158,38 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
   }
 
   @override
-  void deactivate() {
-    context.read<CreatorHeartbeatProvider>().setActive(false);
-    super.deactivate();
-  }
-
-  @override
   void dispose() {
+    _heartbeat?.removeListener(_onHeartbeatChanged);
     _networkProvider?.unregisterRecoveryCallback(_onNetworkRecovery);
     _pendingPollTimer?.cancel();
     super.dispose();
   }
 
   void _toggleOnline(bool value) {
-    setState(() => _isOnline = value);
     context.read<CreatorHeartbeatProvider>().setActive(value);
-    _pendingPollTimer?.cancel();
+    _syncIncomingCallPolling(value, showFeedback: true);
+  }
 
-    if (_isOnline) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('You are online. Waiting for incoming calls…'),
-          backgroundColor: Color(0xFF8A2BE2),
-          duration: Duration(seconds: 3),
-        ),
-      );
+  void _syncIncomingCallPolling(bool isOnline, {required bool showFeedback}) {
+    _pendingPollTimer?.cancel();
+    _pendingPollTimer = null;
+
+    if (isOnline) {
+      if (showFeedback && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You are online. Waiting for incoming calls…'),
+            backgroundColor: Color(0xFF8A2BE2),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
       _pollPendingRequests();
       _pendingPollTimer = Timer.periodic(
         const Duration(seconds: 3),
         (_) => _pollPendingRequests(),
       );
-    } else {
+    } else if (showFeedback && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('You are offline. Calls will not be received.'),
@@ -188,7 +201,7 @@ class _ListenerDashboardScreenState extends State<ListenerDashboardScreen> {
   }
 
   Future<void> _pollPendingRequests() async {
-    if (!mounted || !_isOnline || _incomingDialogOpen) return;
+    if (!mounted || !(_heartbeat?.isActive ?? false) || _incomingDialogOpen) return;
 
     final token = context.read<AuthProvider>().accessToken;
     if (token == null) return;

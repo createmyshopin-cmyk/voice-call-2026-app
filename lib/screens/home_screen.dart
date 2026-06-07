@@ -1,12 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../constants/avatar_assets.dart';
 import '../constants/home_theme.dart';
 import '../models/creator.dart';
 import '../providers/auth_provider.dart';
+import '../providers/creator_heartbeat_provider.dart';
 import '../providers/creator_provider.dart';
 import '../providers/wallet_provider.dart';
+import '../widgets/listener/listener_online_navigation_lock.dart';
 import '../providers/call_history_provider.dart';
 import '../models/call_history_item.dart';
 import '../services/call_service.dart';
@@ -49,6 +54,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentTabIndex = 0;
   int? _lastLoggedBalance;
+  bool _onlineExitDialogOpen = false;
 
   final Set<String> _favouriteCreatorIds = {};
   final HomeLazySections _lazySections = HomeLazySections();
@@ -158,16 +164,57 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  bool _isListenerOnlineLocked(AuthProvider auth, CreatorHeartbeatProvider heartbeat) =>
+      auth.isListener && heartbeat.isActive;
+
+  Future<void> _handleBlockedNavigationWhileOnline(int targetTabIndex) async {
+    if (_onlineExitDialogOpen || !mounted) return;
+    _onlineExitDialogOpen = true;
+    final choice = await showListenerOnlineExitDialog(context);
+    _onlineExitDialogOpen = false;
+    if (!mounted || choice == null || choice == ListenerOnlineExitChoice.stayOnline) {
+      return;
+    }
+
+    await context.read<CreatorHeartbeatProvider>().goOfflineAndWait();
+    if (!mounted) return;
+    setState(() => _currentTabIndex = targetTabIndex);
+  }
+
+  Future<void> _handleOnlineBackPress() async {
+    if (_onlineExitDialogOpen || !mounted) return;
+    _onlineExitDialogOpen = true;
+    final choice = await showListenerOnlineExitDialog(context);
+    _onlineExitDialogOpen = false;
+    if (!mounted || choice == null || choice == ListenerOnlineExitChoice.stayOnline) {
+      return;
+    }
+    await context.read<CreatorHeartbeatProvider>().goOfflineAndWait();
+    if (!mounted) return;
+    await SystemNavigator.pop();
+  }
+
+  void _onBottomNavTap(AuthProvider auth, CreatorHeartbeatProvider heartbeat, int index) {
+    final isOnlineLocked = _isListenerOnlineLocked(auth, heartbeat);
+    if (isOnlineLocked && isListenerTabBlockedWhenOnline(index)) {
+      unawaited(_handleBlockedNavigationWhileOnline(index));
+      return;
+    }
+    setState(() => _currentTabIndex = index);
+  }
+
   @override
   Widget build(BuildContext context) {
     final coinProvider = context.watch<WalletProvider>();
     final authProvider = context.watch<AuthProvider>();
+    final heartbeat = context.watch<CreatorHeartbeatProvider>();
     _logDisplayedBalance(coinProvider, 'build');
     final isListener = authProvider.isListener;
+    final isOnlineLocked = _isListenerOnlineLocked(authProvider, heartbeat);
     final maxTabs = isListener ? 5 : 4;
     final activeIndex = _currentTabIndex.clamp(0, maxTabs - 1);
 
-    final isListenerDashboardTab = isListener && (activeIndex == 3);
+    final isListenerDashboardTab = isListener && (activeIndex == kListenerDashboardTabIndex);
     final isDarkBg = isListenerDashboardTab;
 
     final isHomeTab = activeIndex == 0;
@@ -176,7 +223,15 @@ class _HomeScreenState extends State<HomeScreen> {
         ? HomeResponsive.stickyPromoClearance(context)
         : HomeResponsive.bottomNavHeight(context);
 
-    return Scaffold(
+    return PopScope(
+      canPop: !isOnlineLocked,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (isOnlineLocked) {
+          unawaited(_handleOnlineBackPress());
+        }
+      },
+      child: Scaffold(
       backgroundColor: isDarkBg
           ? const Color(0xFF080E1A)
           : (isHomeTab ? HomeTheme.screenBackground : const Color(0xFFF8F8F8)),
@@ -205,10 +260,11 @@ class _HomeScreenState extends State<HomeScreen> {
               left: 0,
               right: 0,
               bottom: 0,
-              child: _buildBottomNavBar(authProvider, activeIndex),
+              child: _buildBottomNavBar(authProvider, heartbeat, activeIndex),
             ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -237,9 +293,11 @@ class _HomeScreenState extends State<HomeScreen> {
         case 4:
           return ProfileScreen(
             onTabChanged: (index) {
-              setState(() {
-                _currentTabIndex = index;
-              });
+              _onBottomNavTap(
+                authProvider,
+                context.read<CreatorHeartbeatProvider>(),
+                index,
+              );
             },
           );
         default:
@@ -868,9 +926,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // --- FIXED BOTTOM NAVIGATION BAR ---
-  Widget _buildBottomNavBar(AuthProvider authProvider, int activeIndex) {
+  Widget _buildBottomNavBar(
+    AuthProvider authProvider,
+    CreatorHeartbeatProvider heartbeat,
+    int activeIndex,
+  ) {
     final isListener = authProvider.isListener;
-    final isListenerDashboardTab = isListener && (activeIndex == 3);
+    final isOnlineLocked = _isListenerOnlineLocked(authProvider, heartbeat);
+    final isListenerDashboardTab = isListener && (activeIndex == kListenerDashboardTabIndex);
     final isDark = isListenerDashboardTab;
 
     final tabs = _getTabs(authProvider);
@@ -896,13 +959,17 @@ class _HomeScreenState extends State<HomeScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: List.generate(tabs.length, (index) {
           final tab = tabs[index];
+          final isBlocked =
+              isOnlineLocked && isListenerTabBlockedWhenOnline(index);
           return _buildBottomNavItem(
             authProvider,
+            heartbeat,
             activeIndex,
             tab['icon'] as IconData,
             tab['activeIcon'] as IconData,
             tab['label'] as String,
             index,
+            isBlocked: isBlocked,
           );
         }),
       ),
@@ -911,46 +978,65 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildBottomNavItem(
     AuthProvider authProvider,
+    CreatorHeartbeatProvider heartbeat,
     int activeIndex,
     IconData inactiveIcon,
     IconData activeIcon,
     String label,
-    int index,
-  ) {
-    bool isActive = activeIndex == index;
+    int index, {
+    bool isBlocked = false,
+  }) {
+    final isActive = activeIndex == index;
     final isListener = authProvider.isListener;
-    final isListenerDashboardTab = isListener && (activeIndex == 3);
+    final isListenerDashboardTab =
+        isListener && (activeIndex == kListenerDashboardTabIndex);
     final isDark = isListenerDashboardTab;
-    final inactiveColor = isDark ? const Color(0xFF707584) : const Color(0xFF9CA3AF);
+    final inactiveColor =
+        isDark ? const Color(0xFF707584) : const Color(0xFF9CA3AF);
+    final blockedColor = isDark
+        ? const Color(0xFF4A4F5C)
+        : const Color(0xFFD1D5DB);
     final iconSize = HomeResponsive.w(context, 24);
 
-    return ScalePressedButton(
-      onTap: () {
-        setState(() {
-          _currentTabIndex = index;
-        });
-      },
-      pressedScale: 0.94,
-      child: SizedBox(
-        width: HomeResponsive.w(context, 72),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              isActive ? activeIcon : inactiveIcon,
-              color: isActive ? HomeTheme.primary : inactiveColor,
-              size: iconSize,
-            ),
-            SizedBox(height: HomeResponsive.w(context, 3)),
-            Text(
-              label,
-              style: GoogleFonts.poppins(
-                fontSize: HomeResponsive.w(context, 11),
-                fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
-                color: isActive ? HomeTheme.primary : inactiveColor,
+    Color iconColor;
+    Color labelColor;
+    if (isBlocked) {
+      iconColor = blockedColor;
+      labelColor = blockedColor;
+    } else if (isActive) {
+      iconColor = HomeTheme.primary;
+      labelColor = HomeTheme.primary;
+    } else {
+      iconColor = inactiveColor;
+      labelColor = inactiveColor;
+    }
+
+    return Opacity(
+      opacity: isBlocked ? 0.45 : 1.0,
+      child: ScalePressedButton(
+        onTap: () => _onBottomNavTap(authProvider, heartbeat, index),
+        pressedScale: isBlocked ? 1.0 : 0.94,
+        child: SizedBox(
+          width: HomeResponsive.w(context, 72),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                isActive ? activeIcon : inactiveIcon,
+                color: iconColor,
+                size: iconSize,
               ),
-            ),
-          ],
+              SizedBox(height: HomeResponsive.w(context, 3)),
+              Text(
+                label,
+                style: GoogleFonts.poppins(
+                  fontSize: HomeResponsive.w(context, 11),
+                  fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+                  color: labelColor,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
