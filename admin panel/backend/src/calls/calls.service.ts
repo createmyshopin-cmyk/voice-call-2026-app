@@ -22,6 +22,11 @@ import {
   CallRequestStatus,
   TERMINAL_CALL_STATUSES,
 } from './call-status.constants';
+import {
+  buildCallEndSummary,
+  computeCallCoins,
+  type CallEndSummary,
+} from './call-summary';
 
 // ─── Domain model ───────────────────────────────────────────────────────────
 
@@ -59,11 +64,7 @@ export interface CallRequestRecord {
 /** Minimum coin balance required to start a call */
 const MIN_COINS_TO_CALL = 10;
 
-/** Compute coins to deduct: ceil(seconds / 60) × ratePerMinute */
-function computeCoins(durationSeconds: number, ratePerMinute: number): number {
-  const minutes = Math.ceil(durationSeconds / 60);
-  return Math.max(1, minutes) * ratePerMinute;
-}
+const computeCoins = computeCallCoins;
 
 // ─── Row → domain mapping ────────────────────────────────────────────────────
 
@@ -163,13 +164,20 @@ export class CallsService {
   /** All non-active sessions (admin monitoring). */
   async getHistory(): Promise<CallSession[]> {
     const rows = await this.fetchHistoryRows();
-    return this.enrichSessions(rows);
+    return this.enrichSessionsIfNeeded(rows);
   }
 
   /** Call history for the authenticated user (caller or creator). */
   async getHistoryForUser(userId: string): Promise<CallSession[]> {
     const rows = await this.fetchHistoryRows(userId);
-    return this.enrichSessions(rows);
+    return this.enrichSessionsIfNeeded(rows);
+  }
+
+  /** Skips DB round-trips when names were joined in fetchHistoryRows. */
+  private async enrichSessionsIfNeeded(sessions: CallSession[]): Promise<CallSession[]> {
+    const needsEnrichment = sessions.some((s) => !s.callerName || !s.creatorName);
+    if (!needsEnrichment) return sessions;
+    return this.enrichSessions(sessions);
   }
 
   private async fetchHistoryRows(userId?: string): Promise<CallSession[]> {
@@ -178,7 +186,11 @@ export class CallsService {
         let query = this.supabase
           .getClient()
           .from('calls')
-          .select('*')
+          .select(`
+            *,
+            caller:users!calls_caller_id_fkey(name, full_name),
+            creator:users!calls_creator_id_fkey(name, full_name)
+          `)
           .in('status', TERMINAL_CALL_STATUSES)
           .order('started_at', { ascending: false })
           .limit(100);
@@ -189,7 +201,20 @@ export class CallsService {
 
         const { data, error } = await query;
         if (!error && data) {
-          return (data as Record<string, unknown>[]).map(rowToSession);
+          return (data as Record<string, unknown>[]).map((row) => {
+            const session = rowToSession(row);
+            if (!session.callerName) {
+              const caller = row.caller as Record<string, unknown> | null;
+              session.callerName =
+                String(caller?.full_name ?? caller?.name ?? '').trim() || session.callerName;
+            }
+            if (!session.creatorName) {
+              const creator = row.creator as Record<string, unknown> | null;
+              session.creatorName =
+                String(creator?.full_name ?? creator?.name ?? '').trim() || session.creatorName;
+            }
+            return session;
+          });
         }
         console.warn('CallsService.fetchHistoryRows error:', error?.message);
       } catch (e) {
@@ -209,26 +234,20 @@ export class CallsService {
   }
 
   private async enrichSessions(sessions: CallSession[]): Promise<CallSession[]> {
-    return Promise.all(
-      sessions.map(async (session) => {
-        let { callerName, creatorName } = session;
-        if (!callerName) {
-          try {
-            callerName = (await this.usersService.findOne(session.callerId)).name;
-          } catch {
-            callerName = 'Caller';
-          }
-        }
-        if (!creatorName) {
-          try {
-            creatorName = (await this.usersService.findOne(session.creatorId)).name;
-          } catch {
-            creatorName = 'Creator';
-          }
-        }
-        return { ...session, callerName, creatorName };
-      }),
-    );
+    const needsCaller = sessions.filter((s) => !s.callerName).map((s) => s.callerId);
+    const needsCreator = sessions.filter((s) => !s.creatorName).map((s) => s.creatorId);
+    const userMap = await this.usersService.findManyByIds([...needsCaller, ...needsCreator]);
+
+    return sessions.map((session) => {
+      let { callerName, creatorName } = session;
+      if (!callerName) {
+        callerName = userMap.get(session.callerId)?.name || 'Caller';
+      }
+      if (!creatorName) {
+        creatorName = userMap.get(session.creatorId)?.name || 'Creator';
+      }
+      return { ...session, callerName, creatorName };
+    });
   }
 
   async getActive(): Promise<CallSession[]> {
@@ -247,6 +266,87 @@ export class CallsService {
       }
     }
     return this.memCalls.filter((c) => ACTIVE_CALL_STATUSES.includes(c.status));
+  }
+
+  /** Active call for the signed-in caller or creator (resume / cold-start recovery). */
+  async getActiveCallForUser(userId: string) {
+    let session: CallSession | undefined;
+
+    if (this.supabase.isConfigured) {
+      try {
+        const { data, error } = await this.supabase
+          .getClient()
+          .from('calls')
+          .select('*')
+          .or(`caller_id.eq.${userId},creator_id.eq.${userId}`)
+          .in('status', ACTIVE_CALL_STATUSES)
+          .order('started_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (!error && data) {
+          session = rowToSession(data as Record<string, unknown>);
+        } else if (error) {
+          console.warn('CallsService.getActiveCallForUser error:', error.message);
+        }
+      } catch (e) {
+        console.warn(
+          'CallsService.getActiveCallForUser exception:',
+          (e as Error).message,
+        );
+      }
+    }
+
+    if (!session) {
+      session = this.memCalls.find(
+        (c) =>
+          ACTIVE_CALL_STATUSES.includes(c.status) &&
+          (c.callerId === userId || c.creatorId === userId),
+      );
+    }
+
+    if (!session) {
+      return { success: true, callSession: null, userId };
+    }
+
+    const isCreator = session.creatorId === userId;
+    let peerName = isCreator ? session.callerName : session.creatorName;
+    let peerAvatar = `https://i.pravatar.cc/150?u=${isCreator ? session.callerId : session.creatorId}`;
+    let coinsPerMinute = 10;
+
+    try {
+      if (isCreator) {
+        const caller = await this.usersService.findOne(session.callerId);
+        peerName = caller.name;
+        peerAvatar =
+          (caller as { profileImage?: string }).profileImage ?? peerAvatar;
+      } else {
+        const creator = await this.creatorsService.findOne(session.creatorId);
+        peerName = creator.name;
+        peerAvatar =
+          (creator as { profileImage?: string }).profileImage ?? peerAvatar;
+        coinsPerMinute = creator.ratePerMinute ?? 10;
+      }
+    } catch (e) {
+      console.warn('getActiveCallForUser enrich error:', (e as Error).message);
+    }
+
+    const channelName = session.channelName;
+    const token = this._makeAgoraToken(channelName);
+    const appId = process.env.AGORA_APP_ID?.trim() ?? '';
+
+    return {
+      success: true,
+      userId,
+      callSession: session,
+      channelName,
+      peerName,
+      peerAvatar,
+      coinsPerMinute,
+      agoraToken: token,
+      agoraAppId: appId,
+      isCreator,
+    };
   }
 
   /** Auto-close ring requests that were never answered (prevents repeat incoming UI). */
@@ -281,29 +381,24 @@ export class CallsService {
 
         if (!error && data?.length) {
           const rows = data as Record<string, unknown>[];
-          const enriched = await Promise.all(
-            rows.map(async (row) => {
-              let callerName = '';
-              let callerAvatar = '';
-              try {
-                const caller = await this.usersService.findOne(row.caller_id as string);
-                callerName = caller.name;
-                callerAvatar =
-                  (caller as { profileImage?: string }).profileImage ||
-                  `https://i.pravatar.cc/150?u=${caller.name}`;
-              } catch {
-                callerAvatar = 'https://i.pravatar.cc/150?u=caller';
-              }
-              return {
-                id: row.id as string,
-                callerId: row.caller_id as string,
-                callerName,
-                callerAvatar,
-                type: row.type as 'voice' | 'video',
-                createdAt: row.created_at as string,
-              };
-            }),
-          );
+          const callerIds = rows.map((row) => row.caller_id as string);
+          const userMap = await this.usersService.findManyByIds(callerIds);
+          const enriched = rows.map((row) => {
+            const caller = userMap.get(row.caller_id as string);
+            const callerName = caller?.name || '';
+            const callerAvatar =
+              (caller as { profileImage?: string; avatarUrl?: string } | undefined)?.profileImage ||
+              (caller as { avatarUrl?: string } | undefined)?.avatarUrl ||
+              (callerName ? `https://i.pravatar.cc/150?u=${callerName}` : 'https://i.pravatar.cc/150?u=caller');
+            return {
+              id: row.id as string,
+              callerId: row.caller_id as string,
+              callerName,
+              callerAvatar,
+              type: row.type as 'voice' | 'video',
+              createdAt: row.created_at as string,
+            };
+          });
           return { requests: enriched };
         }
         if (!error) return { requests: [] };
@@ -939,6 +1034,123 @@ export class CallsService {
     };
   }
 
+  // ─── Call summary (source of truth for end-of-call UI) ─────────────────────
+
+  async getCallSummary(userId: string, callId: string): Promise<CallEndSummary> {
+    const row = await this.fetchCallRow(callId);
+    const callerId = row.caller_id as string;
+    const creatorId = row.creator_id as string;
+    if (userId !== callerId && userId !== creatorId) {
+      throw new ForbiddenException('Only call participants can view this summary');
+    }
+    return this.assembleCallEndSummary(row, userId);
+  }
+
+  private async fetchCallRow(callId: string): Promise<Record<string, unknown>> {
+    if (this.supabase.isConfigured) {
+      const { data, error } = await this.supabase
+        .getClient()
+        .from('calls')
+        .select('*')
+        .eq('id', callId)
+        .single();
+
+      if (error) {
+        if (error.code === 'PGRST116') {
+          throw new NotFoundException(`Call session ${callId} not found`);
+        }
+        throw new InternalServerErrorException(error.message);
+      }
+      return data as Record<string, unknown>;
+    }
+
+    const mem = this.memCalls.find((c) => c.id === callId);
+    if (!mem) throw new NotFoundException(`Call session ${callId} not found`);
+    return {
+      id: mem.id,
+      caller_id: mem.callerId,
+      creator_id: mem.creatorId,
+      duration_seconds: mem.durationSeconds,
+      coins_spent: mem.coinsSpent,
+      coins_deducted: mem.coinsDeducted,
+      status: mem.status,
+      started_at: mem.startedAt,
+    };
+  }
+
+  private async fetchGiftTotalsForCall(callId: string): Promise<{
+    giftCoinsSpent: number;
+    creatorGiftEarnings: number;
+  }> {
+    if (!this.supabase.isConfigured) {
+      return { giftCoinsSpent: 0, creatorGiftEarnings: 0 };
+    }
+
+    const { data, error } = await this.supabase
+      .getClient()
+      .from('gift_transactions')
+      .select('coins_spent, creator_coins')
+      .eq('call_id', callId);
+
+    if (error || !data?.length) {
+      return { giftCoinsSpent: 0, creatorGiftEarnings: 0 };
+    }
+
+    let giftCoinsSpent = 0;
+    let creatorGiftEarnings = 0;
+    for (const row of data as Record<string, unknown>[]) {
+      giftCoinsSpent += Number(row.coins_spent ?? 0);
+      creatorGiftEarnings += Number(row.creator_coins ?? 0);
+    }
+    return { giftCoinsSpent, creatorGiftEarnings };
+  }
+
+  private async fetchCreatorCallEarnings(callId: string): Promise<number> {
+    if (!this.supabase.isConfigured) return 0;
+
+    const { data } = await this.supabase
+      .getClient()
+      .from('creator_earnings')
+      .select('creator_share')
+      .eq('call_id', callId)
+      .maybeSingle();
+
+    return Number((data as Record<string, unknown> | null)?.creator_share ?? 0);
+  }
+
+  private async assembleCallEndSummary(
+    row: Record<string, unknown>,
+    viewerUserId: string,
+  ): Promise<CallEndSummary> {
+    const callId = row.id as string;
+    const callerId = row.caller_id as string;
+    const callDuration = Number(row.duration_seconds ?? 0);
+    const callCoinsSpent = Number(row.coins_spent ?? row.coins_deducted ?? 0);
+    const [giftTotals, creatorCallEarnings] = await Promise.all([
+      this.fetchGiftTotalsForCall(callId),
+      this.fetchCreatorCallEarnings(callId),
+    ]);
+
+    let remainingBalance: number | undefined;
+    if (viewerUserId === callerId) {
+      try {
+        const caller = await this.usersService.findOne(callerId);
+        remainingBalance = caller.coins;
+      } catch {
+        /* optional */
+      }
+    }
+
+    return buildCallEndSummary({
+      callDuration,
+      callCoinsSpent,
+      giftCoinsSpent: giftTotals.giftCoinsSpent,
+      creatorCallEarnings,
+      creatorGiftEarnings: giftTotals.creatorGiftEarnings,
+      remainingBalance,
+    });
+  }
+
   // ─── End a call ─────────────────────────────────────────────────────────────
 
   async endCall(userId: string, callId: string, dto: EndCallDto) {
@@ -968,8 +1180,21 @@ export class CallsService {
           throw new ForbiddenException('Only call participants can end this session');
         }
 
-        if (!ACTIVE_CALL_STATUSES.includes(normalizeCallStatus(row.status as string))) {
-          throw new BadRequestException('Call session has already ended');
+        const callStatus = normalizeCallStatus(row.status as string);
+        if (!ACTIVE_CALL_STATUSES.includes(callStatus)) {
+          const fullRow = await this.fetchCallRow(callId);
+          const summary = await this.assembleCallEndSummary(fullRow, userId);
+          const session = rowToSession(fullRow);
+          return {
+            message: 'Call already ended.',
+            alreadyEnded: true,
+            callSession: session,
+            callRequestStatus: 'accepted' as const,
+            coinsDeducted: summary.callCoinsSpent,
+            coinsSpent: summary.callCoinsSpent,
+            newBalance: summary.remainingBalance,
+            ...summary,
+          };
         }
 
         const caller = await this.usersService.findOne(callerId);
@@ -1049,19 +1274,35 @@ export class CallsService {
         const memReq = this.memCallRequests.find((r) => r.callId === callId);
         if (memReq) memReq.status = 'accepted';
 
+        const endedRow = {
+          ...row,
+          status: 'ended',
+          ended_at: endedAt,
+          duration_seconds: durationSeconds,
+          coins_spent: coinsSpent,
+          coins_deducted: coinsSpent,
+        };
+        const summary = await this.assembleCallEndSummary(endedRow, userId);
+        if (newBalance != null) {
+          summary.remainingBalance = newBalance;
+        }
+
         return {
           message: 'Call ended. Coins deducted successfully.',
+          alreadyEnded: false,
           callSession: session,
           callRequestStatus: 'accepted' as const,
           coinsDeducted: coinsSpent,
           coinsSpent,
           newBalance,
+          ...summary,
         };
       } catch (e) {
         if (
           e instanceof NotFoundException ||
           e instanceof BadRequestException ||
-          e instanceof InternalServerErrorException
+          e instanceof InternalServerErrorException ||
+          e instanceof ForbiddenException
         ) {
           throw e;
         }
@@ -1075,7 +1316,29 @@ export class CallsService {
       throw new ForbiddenException('Only call participants can end this session');
     }
     if (!ACTIVE_CALL_STATUSES.includes(mem.status)) {
-      throw new BadRequestException('Call session has already ended');
+      const summary = await this.assembleCallEndSummary(
+        {
+          id: mem.id,
+          caller_id: mem.callerId,
+          creator_id: mem.creatorId,
+          duration_seconds: mem.durationSeconds,
+          coins_spent: mem.coinsSpent,
+          coins_deducted: mem.coinsDeducted,
+          status: mem.status,
+          started_at: mem.startedAt,
+        },
+        userId,
+      );
+      return {
+        message: 'Call already ended.',
+        alreadyEnded: true,
+        callSession: mem,
+        callRequestStatus: 'accepted' as const,
+        coinsDeducted: summary.callCoinsSpent,
+        coinsSpent: summary.callCoinsSpent,
+        newBalance: summary.remainingBalance,
+        ...summary,
+      };
     }
 
     const caller = await this.usersService.findOne(mem.callerId);
@@ -1116,13 +1379,32 @@ export class CallsService {
     }
 
 
+    const summary = await this.assembleCallEndSummary(
+      {
+        id: mem.id,
+        caller_id: mem.callerId,
+        creator_id: mem.creatorId,
+        duration_seconds: mem.durationSeconds,
+        coins_spent: mem.coinsSpent,
+        coins_deducted: mem.coinsDeducted,
+        status: mem.status,
+        started_at: mem.startedAt,
+      },
+      userId,
+    );
+    if (newBalance != null) {
+      summary.remainingBalance = newBalance;
+    }
+
     return {
       message: 'Call ended. Coins deducted successfully.',
+      alreadyEnded: false,
       callSession: mem,
       callRequestStatus: 'accepted' as const,
       coinsDeducted: coinsSpent,
       coinsSpent,
       newBalance,
+      ...summary,
     };
   }
 
@@ -1158,24 +1440,21 @@ export class CallsService {
           throw new InternalServerErrorException(error.message);
         }
 
-        let callerName = '';
-        let creatorName = '';
-        try {
-          const caller = await this.usersService.findOne((data as Record<string, unknown>).caller_id as string);
-          callerName = caller.name;
-        } catch {
-          /* optional */
-        }
-        try {
-          const creator = await this.creatorsService.findOne(
-            (data as Record<string, unknown>).creator_id as string,
-          );
-          creatorName = creator.name;
-        } catch {
-          /* optional */
+        const row = data as Record<string, unknown>;
+        const callerId = row.caller_id as string;
+        const creatorId = row.creator_id as string;
+        const userMap = await this.usersService.findManyByIds([callerId, creatorId]);
+        const callerName = userMap.get(callerId)?.name ?? '';
+        let creatorName = userMap.get(creatorId)?.name ?? '';
+        if (!creatorName) {
+          try {
+            creatorName = (await this.creatorsService.findOne(creatorId)).name;
+          } catch {
+            /* optional */
+          }
         }
 
-        const record = rowToCallRequest(data as Record<string, unknown>, callerName, creatorName);
+        const record = rowToCallRequest(row, callerName, creatorName);
         if (record.callId) {
           const { data: callData } = await this.supabase
             .getClient()

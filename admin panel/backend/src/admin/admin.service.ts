@@ -193,57 +193,41 @@ export class AdminService {
       try {
         const client = this.supabase.getClient();
 
-        const { count: totalUsers } = await client
-          .from('users')
-          .select('*', { count: 'exact', head: true });
-
-        const { count: totalListeners } = await client
-          .from('users')
-          .select('*', { count: 'exact', head: true })
-          .eq('is_creator', true);
-
-        const { count: pendingApplications } = await client
-          .from('users')
-          .select('id, creator_profiles!inner()')
-          .eq('is_creator', false);
-
-        const { count: activeListenersOnline } = await client
-          .from('creator_profiles')
-          .select('*', { count: 'exact', head: true })
-          .or('is_online.eq.true,online_status.eq.true');
-
-        const { count: totalCalls } = await client
-          .from('calls')
-          .select('*', { count: 'exact', head: true });
-
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
-        const { count: todaysCalls } = await client
-          .from('calls')
-          .select('*', { count: 'exact', head: true })
-          .gte('created_at', todayStart.toISOString());
+        const todayIso = todayStart.toISOString();
 
-        const { data: callCoins } = await client
-          .from('calls')
-          .select('coins_spent, coins_deducted');
+        const [
+          { count: totalUsers },
+          { count: totalListeners },
+          { count: pendingApplications },
+          { count: activeListenersOnline },
+          { count: totalCalls },
+          { count: todaysCalls },
+          { data: callCoins },
+          { data: successfulPayments },
+          { count: pendingWithdrawals },
+        ] = await Promise.all([
+          client.from('users').select('*', { count: 'exact', head: true }),
+          client.from('users').select('*', { count: 'exact', head: true }).eq('is_creator', true),
+          client.from('users').select('id, creator_profiles!inner()', { count: 'exact', head: true }).eq('is_creator', false),
+          client.from('creator_profiles').select('*', { count: 'exact', head: true }).or('is_online.eq.true,online_status.eq.true'),
+          client.from('calls').select('*', { count: 'exact', head: true }),
+          client.from('calls').select('*', { count: 'exact', head: true }).gte('created_at', todayIso),
+          client.from('calls').select('coins_spent, coins_deducted'),
+          client.from('payments').select('amount').eq('status', 'success'),
+          client.from('withdrawals').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+        ]);
+
         const totalCoinsSpent = (callCoins ?? []).reduce(
           (sum, c) => sum + (c.coins_spent ?? c.coins_deducted ?? 0),
           0,
         );
 
-        const { data: successfulPayments } = await client
-          .from('payments')
-          .select('amount')
-          .eq('status', 'success');
         const platformRevenue = (successfulPayments ?? []).reduce(
           (sum, p) => sum + Number(p.amount ?? 0),
           0,
         );
-
-        const { count: pendingWithdrawals } = await client
-          .from('withdrawals')
-          .select('*', { count: 'exact', head: true })
-          .eq('status', 'pending');
 
         return {
           totalUsers: totalUsers ?? 0,

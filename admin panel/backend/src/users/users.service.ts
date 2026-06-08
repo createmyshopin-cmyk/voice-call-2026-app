@@ -64,6 +64,19 @@ export interface PublicUserProfile {
   creatorStatus: string;
 }
 
+function resolveOnboardingCompleted(user: User): boolean {
+  if (user.onboardingCompleted) return true;
+  const fullName = resolveDisplayName(
+    { full_name: user.fullName, name: user.name },
+    '',
+  );
+  return (
+    fullName.length >= 3 &&
+    Boolean(user.dateOfBirth) &&
+    (user.gender === 'male' || user.gender === 'female')
+  );
+}
+
 export function toPublicProfile(user: User): PublicUserProfile {
   const fullName = resolveDisplayName(
     { full_name: user.fullName, name: user.name },
@@ -75,7 +88,7 @@ export function toPublicProfile(user: User): PublicUserProfile {
     dateOfBirth: user.dateOfBirth,
     gender: user.gender,
     avatarUrl: user.avatarUrl,
-    onboardingCompleted: Boolean(user.onboardingCompleted),
+    onboardingCompleted: resolveOnboardingCompleted(user),
     name: fullName,
     phone: user.phone,
     email: user.email,
@@ -154,6 +167,40 @@ export class UsersService {
       }
     }
     return status ? this.memUsers.filter((u) => u.status === status) : [...this.memUsers];
+  }
+
+  /** Batch-fetch users by id — avoids N+1 in list enrichment. */
+  async findManyByIds(ids: string[]): Promise<Map<string, User>> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    const map = new Map<string, User>();
+    if (!unique.length) return map;
+
+    if (this.supabase.isConfigured) {
+      try {
+        const { data, error } = await this.supabase
+          .getClient()
+          .from('users')
+          .select(USER_SELECT)
+          .in('id', unique);
+        if (!error && data) {
+          for (const row of data as Record<string, unknown>[]) {
+            const user = rowToUser(row);
+            map.set(user.id, user);
+          }
+        } else if (error) {
+          console.warn('UsersService.findManyByIds Supabase error:', error.message);
+        }
+      } catch (e) {
+        console.warn('UsersService.findManyByIds exception:', (e as Error).message);
+      }
+    }
+
+    for (const id of unique) {
+      if (map.has(id)) continue;
+      const mem = this.memUsers.find((u) => u.id === id);
+      if (mem) map.set(id, mem);
+    }
+    return map;
   }
 
   async findOne(id: string): Promise<User> {
@@ -336,15 +383,15 @@ export class UsersService {
     if (this.supabase.isConfigured) {
       try {
         // Use RPC to do an atomic increment so concurrent calls don't race
-        const { data, error } = await this.supabase
+        const { data: newBalance, error } = await this.supabase
           .getClient()
           .rpc('adjust_user_coins', { p_user_id: id, p_delta: delta });
 
-        if (!error) {
-          // rpc returns the new balance
-          const updated = await this.findOne(id);
+        if (!error && newBalance != null) {
           const mem = this.memUsers.find((u) => u.id === id);
-          if (mem) mem.coins = updated.coins;
+          if (mem) mem.coins = Number(newBalance);
+          const updated = await this.findOne(id);
+          updated.coins = Number(newBalance);
           return updated;
         }
         // RPC might not exist yet — fall back to read-modify-write

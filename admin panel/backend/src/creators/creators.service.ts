@@ -405,11 +405,81 @@ export class CreatorsService {
     return this.creators.filter((c) => c.status === 'rejected');
   }
 
+  private async fetchOneFromSupabase(userId: string): Promise<Creator | null> {
+    const { data, error } = await this.supabase.getClient().from('users').select(`
+        id,
+        name,
+        full_name,
+        email,
+        phone,
+        gender,
+        profile_image,
+        status,
+        created_at,
+        creator_profiles!inner (
+          bio,
+          languages,
+          experience,
+          price_per_minute,
+          rating,
+          total_calls,
+          total_earnings,
+          online_status,
+          is_online,
+          last_seen_at
+        )
+      `)
+      .eq('id', userId)
+      .eq('is_creator', true)
+      .maybeSingle();
+
+    if (error || !data) return null;
+
+    const row = data as Record<string, unknown>;
+    const profile = row.creator_profiles as Record<string, unknown> | Record<string, unknown>[];
+    const cp = Array.isArray(profile) ? profile[0] : profile;
+    const languagesRaw = (cp?.languages as string) || '';
+    const languages = languagesRaw
+      ? languagesRaw.split(',').map((l) => l.trim()).filter(Boolean)
+      : ['English'];
+    const createdAt = row.created_at as string | undefined;
+    const displayName = resolveDisplayName(
+      { full_name: row.full_name as string | null, name: row.name as string | null },
+      'Creator',
+    );
+
+    return {
+      id: row.id as string,
+      name: displayName,
+      phone: (row.phone as string) || '',
+      email: (row.email as string) || '',
+      bio: (cp?.bio as string) || '',
+      languages,
+      gender: (row.gender as string) || 'Female',
+      experience: (cp?.experience as string) || '',
+      status: (row.status as string) === 'suspended' ? 'suspended' : 'active',
+      rating: Number(cp?.rating) || 0,
+      completedCalls: Number(cp?.total_calls) || 0,
+      revenueGenerated: Number(cp?.total_earnings) || 0,
+      ratePerMinute: Number(cp?.price_per_minute) || 10,
+      lastSeenAt:
+        (cp?.last_seen_at as string) || this.lastSeenByUserId.get(row.id as string),
+      isOnline: this.computeIsOnline(
+        (cp?.last_seen_at as string) || this.lastSeenByUserId.get(row.id as string),
+        Boolean(cp?.is_online ?? cp?.online_status),
+      ),
+      profileImage:
+        (row.profile_image as string) ||
+        `https://i.pravatar.cc/150?u=${displayName}`,
+      createdAt,
+      isNew: this.isRecentlyJoined(createdAt),
+    };
+  }
+
   async findOne(id: string) {
     if (this.supabase.isConfigured) {
       try {
-        const active = await this.fetchActiveFromSupabase();
-        const match = active.find((c) => c.id === id);
+        const match = await this.fetchOneFromSupabase(id);
         if (match) return match;
       } catch {
         // fall through to in-memory
@@ -734,19 +804,15 @@ export class CreatorsService {
   async getWalletBalance(creatorId: string) {
     if (this.supabase.isConfigured) {
       try {
-        let creatorProfileId = creatorId;
-        const { data: profile } = await this.supabase.getClient()
+        const client = this.supabase.getClient();
+        const { data: profile } = await client
           .from('creator_profiles')
           .select('id')
           .eq('user_id', creatorId)
           .maybeSingle();
 
-        if (profile) {
-          creatorProfileId = profile.id;
-        }
-
-        const { data, error } = await this.supabase
-          .getClient()
+        const creatorProfileId = profile?.id ?? creatorId;
+        const { data, error } = await client
           .from('creator_wallets')
           .select('*')
           .eq('creator_id', creatorProfileId)
