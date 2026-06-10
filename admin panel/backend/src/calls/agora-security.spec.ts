@@ -1,6 +1,18 @@
 import { ForbiddenException, BadRequestException } from '@nestjs/common';
 import { CallsService } from './calls.service';
 
+function mockCallRoleUsers(service: CallsService): void {
+  (service as any).usersService = {
+    findOne: jest.fn().mockImplementation((id: string) =>
+      Promise.resolve({
+        id,
+        name: id,
+        isCreator: id.includes('creator'),
+      }),
+    ),
+  };
+}
+
 describe('Agora channel security', () => {
   const service = Object.create(CallsService.prototype) as CallsService;
 
@@ -8,6 +20,7 @@ describe('Agora channel security', () => {
     (service as any).supabase = { isConfigured: false };
     (service as any).memCalls = [];
     (service as any).memCallRequests = [];
+    mockCallRoleUsers(service);
   });
 
   it('rejects unknown channel in memory mode', async () => {

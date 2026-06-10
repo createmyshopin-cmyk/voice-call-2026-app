@@ -19,7 +19,11 @@ import { JwtAuthGuard } from '../auth/auth.guard';
 import { CreatorGuard } from './creator.guard';
 import { GiftReplyDto, SendGiftDto } from './dto/gift.dto';
 import { GiftService } from './gift.service';
+import { AppUserGuard } from './app-user.guard';
 import { UserThrottlerGuard } from './user-throttler.guard';
+
+/** In-call gifting: high enough for combos, low enough to block abuse. */
+export const GIFT_SEND_RATE_LIMIT = { limit: 30, ttl: 60_000 } as const;
 
 @ApiTags('Gifts')
 @ApiBearerAuth()
@@ -36,7 +40,8 @@ export class GiftController {
   }
 
   @Post('send')
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @UseGuards(AppUserGuard)
+  @Throttle({ default: GIFT_SEND_RATE_LIMIT })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Send a gift during an active call' })
   @ApiResponse({ status: 200, description: 'Gift sent successfully.' })
@@ -47,6 +52,7 @@ export class GiftController {
   }
 
   @Get('history')
+  @UseGuards(AppUserGuard)
   @ApiOperation({ summary: 'Sender gift history' })
   @ApiResponse({ status: 200, description: 'Gift send history for authenticated user.' })
   history(@Request() req: { user: { id: string } }) {

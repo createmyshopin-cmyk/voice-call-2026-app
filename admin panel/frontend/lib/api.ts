@@ -61,18 +61,18 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}) {
   return response;
 }
 
-export async function fetchJsonAuth(url: string, options: RequestInit = {}) {
+export async function fetchJsonAuth<T = unknown>(url: string, options: RequestInit = {}) {
   try {
     const response = await fetchWithAuth(url, options);
     const text = await response.text();
-    let data: unknown = null;
+    let data: T | null = null;
     try {
-      data = text ? JSON.parse(text) : null;
+      data = text ? (JSON.parse(text) as T) : null;
     } catch {
-      data = text;
+      data = text as unknown as T;
     }
     return { ok: response.ok, status: response.status, data };
   } catch {
-    return { ok: false, status: 0, data: null };
+    return { ok: false, status: 0, data: null as T | null };
   }
 }

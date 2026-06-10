@@ -9,6 +9,7 @@ import {
   HttpStatus,
   UseGuards,
   Request,
+  Headers,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -24,6 +25,8 @@ import { AgoraTokenDto } from './dto/agora-token.dto';
 import { UpdateCallStatusDto } from './dto/update-call-status.dto';
 import { JwtAuthGuard } from '../auth/auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
 
 @ApiTags('Call Connections')
 @ApiBearerAuth()
@@ -35,7 +38,8 @@ export class CallsController {
   // ── Monitoring (admin) ──────────────────────────────────────────────────────
 
   @Get('active')
-  @UseGuards(AdminGuard)
+  @UseGuards(AdminGuard, RolesGuard)
+  @Roles('super_admin', 'moderator', 'support_admin', 'fraud_admin', 'operations_admin')
   @ApiOperation({ summary: 'Get live active call sessions (admin)' })
   @ApiResponse({ status: 200, description: 'List of active sessions.' })
   @ApiResponse({ status: 403, description: 'Admin access required.' })
@@ -43,8 +47,17 @@ export class CallsController {
     return this.callsService.getActive();
   }
 
+  @Get('active/me')
+  @ApiOperation({ summary: 'Get the authenticated user\'s active call session' })
+  @ApiResponse({ status: 200, description: 'Active call or null when none.' })
+  @ApiResponse({ status: 401, description: 'Unauthorized.' })
+  getMyActiveCall(@Request() req: { user: { id: string } }) {
+    return this.callsService.getActiveCallForUser(req.user.id);
+  }
+
   @Get()
-  @UseGuards(AdminGuard)
+  @UseGuards(AdminGuard, RolesGuard)
+  @Roles('super_admin', 'moderator', 'support_admin', 'fraud_admin', 'operations_admin')
   @ApiOperation({ summary: 'Get all historical call sessions (admin)' })
   @ApiResponse({ status: 200, description: 'List of historical call sessions.' })
   @ApiResponse({ status: 403, description: 'Admin access required.' })
@@ -186,6 +199,19 @@ export class CallsController {
     return this.callsService.updateCallStatus(req.user.id, id, dto);
   }
 
+  @Get(':id/summary')
+  @ApiOperation({ summary: 'Get authoritative end-of-call coin summary' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Returns callDuration, callCoinsSpent, giftCoinsSpent, totalCoinsSpent, creator earnings.',
+  })
+  @ApiResponse({ status: 403, description: 'Not a call participant.' })
+  @ApiResponse({ status: 404, description: 'Call session not found.' })
+  getCallSummary(@Request() req: { user: { id: string } }, @Param('id') id: string) {
+    return this.callsService.getCallSummary(req.user.id, id);
+  }
+
   @Post('active/:id/end')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -193,16 +219,17 @@ export class CallsController {
   })
   @ApiResponse({
     status: 200,
-    description: 'Call ended. Returns coinsDeducted and newBalance.',
+    description:
+      'Call ended. Returns full summary: callCoinsSpent, giftCoinsSpent, creator earnings, remainingBalance.',
   })
-  @ApiResponse({ status: 400, description: 'Call already ended.' })
   @ApiResponse({ status: 401, description: 'Unauthorized.' })
   @ApiResponse({ status: 404, description: 'Call session not found.' })
   endCall(
     @Request() req: { user: { id: string } },
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Param('id') id: string,
     @Body() dto: EndCallDto,
   ) {
-    return this.callsService.endCall(req.user.id, id, dto);
+    return this.callsService.endCall(req.user.id, id, dto, idempotencyKey);
   }
 }

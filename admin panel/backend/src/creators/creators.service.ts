@@ -1,9 +1,11 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import { timed } from '../common/query-timer';
 import { SupabaseService } from '../supabase/supabase.service';
 import { resolveDisplayName } from '../users/users.service';
 import admin from '../auth/firebase-admin';
@@ -13,6 +15,7 @@ export const CREATOR_ONLINE_THRESHOLD_SECONDS = 60;
 
 export interface Creator {
   id: string;
+  creatorProfileId?: string;
   name: string;
   phone: string;
   email: string;
@@ -32,8 +35,12 @@ export interface Creator {
   isNew?: boolean;
 }
 
+const WALLET_SCOPE = 'creators/wallet/balance';
+
 @Injectable()
 export class CreatorsService {
+  private readonly logger = new Logger(CreatorsService.name);
+
   /** In-memory last_seen when Supabase is unavailable (keyed by user id). */
   private readonly lastSeenByUserId = new Map<string, string>();
   private readonly memEarnings: any[] = [];
@@ -134,6 +141,7 @@ export class CreatorsService {
   mapToDto(creator: Creator) {
     return {
       id: creator.id,
+      creatorProfileId: creator.creatorProfileId ?? null,
       name: creator.name,
       language: creator.languages[0] || 'English',
       gender: creator.gender,
@@ -310,6 +318,7 @@ export class CreatorsService {
         status,
         created_at,
         creator_profiles!inner (
+          id,
           bio,
           languages,
           experience,
@@ -352,6 +361,7 @@ export class CreatorsService {
 
       return {
         id: row.id as string,
+        creatorProfileId: (cp?.id as string) ?? undefined,
         name: displayName,
         phone: (row.phone as string) || '',
         email: (row.email as string) || '',
@@ -405,8 +415,55 @@ export class CreatorsService {
     return this.creators.filter((c) => c.status === 'rejected');
   }
 
+  private mapUserProfileRow(
+    row: Record<string, unknown>,
+    cp: Record<string, unknown>,
+  ): Creator {
+    const languagesRaw = (cp.languages as string) || '';
+    const languages = languagesRaw
+      ? languagesRaw.split(',').map((l) => l.trim()).filter(Boolean)
+      : ['English'];
+    const createdAt = row.created_at as string | undefined;
+    const userId = row.id as string;
+    const displayName = resolveDisplayName(
+      { full_name: row.full_name as string | null, name: row.name as string | null },
+      'Creator',
+    );
+
+    return {
+      id: userId,
+      name: displayName,
+      phone: (row.phone as string) || '',
+      email: (row.email as string) || '',
+      bio: (cp.bio as string) || '',
+      languages,
+      gender: (row.gender as string) || 'Female',
+      experience: (cp.experience as string) || '',
+      status: (row.status as string) === 'suspended' ? 'suspended' : 'active',
+      rating: Number(cp.rating) || 0,
+      completedCalls: Number(cp.total_calls) || 0,
+      revenueGenerated: Number(cp.total_earnings) || 0,
+      ratePerMinute: Number(cp.price_per_minute) || 10,
+      lastSeenAt:
+        (cp.last_seen_at as string) || this.lastSeenByUserId.get(userId),
+      isOnline: this.computeIsOnline(
+        (cp.last_seen_at as string) || this.lastSeenByUserId.get(userId),
+        Boolean(cp.is_online ?? cp.online_status),
+      ),
+      profileImage:
+        (row.profile_image as string) ||
+        `https://i.pravatar.cc/150?u=${displayName}`,
+      createdAt,
+      isNew: this.isRecentlyJoined(createdAt),
+    };
+  }
+
   private async fetchOneFromSupabase(userId: string): Promise<Creator | null> {
-    const { data, error } = await this.supabase.getClient().from('users').select(`
+    const client = this.supabase.getClient();
+
+    const { data: userRow, error: userErr } = await client
+      .from('users')
+      .select(`
         id,
         name,
         full_name,
@@ -433,47 +490,63 @@ export class CreatorsService {
       .eq('is_creator', true)
       .maybeSingle();
 
-    if (error || !data) return null;
+    if (!userErr && userRow) {
+      const row = userRow as Record<string, unknown>;
+      const profile = row.creator_profiles as
+        | Record<string, unknown>
+        | Record<string, unknown>[];
+      const cp = Array.isArray(profile) ? profile[0] : profile;
+      if (cp) return this.mapUserProfileRow(row, cp);
+    }
 
-    const row = data as Record<string, unknown>;
-    const profile = row.creator_profiles as Record<string, unknown> | Record<string, unknown>[];
-    const cp = Array.isArray(profile) ? profile[0] : profile;
-    const languagesRaw = (cp?.languages as string) || '';
-    const languages = languagesRaw
-      ? languagesRaw.split(',').map((l) => l.trim()).filter(Boolean)
-      : ['English'];
-    const createdAt = row.created_at as string | undefined;
-    const displayName = resolveDisplayName(
-      { full_name: row.full_name as string | null, name: row.name as string | null },
-      'Creator',
-    );
+    // Fallback: profile row exists (heartbeat/online work) but users join returned empty.
+    const { data: profileRow, error: profileErr } = await client
+      .from('creator_profiles')
+      .select(`
+        bio,
+        languages,
+        experience,
+        price_per_minute,
+        rating,
+        total_calls,
+        total_earnings,
+        online_status,
+        is_online,
+        last_seen_at,
+        users!inner (
+          id,
+          name,
+          full_name,
+          email,
+          phone,
+          gender,
+          profile_image,
+          status,
+          created_at
+        )
+      `)
+      .eq('user_id', userId)
+      .maybeSingle();
 
-    return {
-      id: row.id as string,
-      name: displayName,
-      phone: (row.phone as string) || '',
-      email: (row.email as string) || '',
-      bio: (cp?.bio as string) || '',
-      languages,
-      gender: (row.gender as string) || 'Female',
-      experience: (cp?.experience as string) || '',
-      status: (row.status as string) === 'suspended' ? 'suspended' : 'active',
-      rating: Number(cp?.rating) || 0,
-      completedCalls: Number(cp?.total_calls) || 0,
-      revenueGenerated: Number(cp?.total_earnings) || 0,
-      ratePerMinute: Number(cp?.price_per_minute) || 10,
-      lastSeenAt:
-        (cp?.last_seen_at as string) || this.lastSeenByUserId.get(row.id as string),
-      isOnline: this.computeIsOnline(
-        (cp?.last_seen_at as string) || this.lastSeenByUserId.get(row.id as string),
-        Boolean(cp?.is_online ?? cp?.online_status),
-      ),
-      profileImage:
-        (row.profile_image as string) ||
-        `https://i.pravatar.cc/150?u=${displayName}`,
-      createdAt,
-      isNew: this.isRecentlyJoined(createdAt),
-    };
+    if (profileErr || !profileRow) {
+      if (userErr) {
+        console.warn(
+          `[Creators] fetchOneFromSupabase userId=${userId} userErr=${userErr.message}`,
+        );
+      }
+      return null;
+    }
+
+    const cp = profileRow as Record<string, unknown>;
+    const users = cp.users as Record<string, unknown> | Record<string, unknown>[];
+    const row = Array.isArray(users) ? users[0] : users;
+    if (!row) return null;
+    return this.mapUserProfileRow(row, cp);
+  }
+
+  async findMe(userId: string) {
+    const creator = await this.findOne(userId);
+    return this.mapToDto(creator);
   }
 
   async findOne(id: string) {
@@ -673,8 +746,7 @@ export class CreatorsService {
       if (earningErr) {
         // Postgres unique-violation code: 23505
         if ((earningErr as any).code === '23505') {
-          console.warn(`[recordEarnings] Duplicate earning suppressed for call ${callId} — unique constraint hit.`);
-          return; // Exit cleanly; wallet was already credited on the first request.
+          return; // Idempotent: concurrent end-call already credited this call.
         }
         throw new Error(`Failed to log creator earning: ${earningErr.message}`);
       }
@@ -802,33 +874,49 @@ export class CreatorsService {
   }
 
   async getWalletBalance(creatorId: string) {
+    const requestStart = performance.now();
+
     if (this.supabase.isConfigured) {
       try {
         const client = this.supabase.getClient();
-        const { data: profile } = await client
-          .from('creator_profiles')
-          .select('id')
-          .eq('user_id', creatorId)
-          .maybeSingle();
 
-        const creatorProfileId = profile?.id ?? creatorId;
-        const { data, error } = await client
-          .from('creator_wallets')
-          .select('*')
-          .eq('creator_id', creatorProfileId)
-          .maybeSingle();
+        // Single round-trip: join creator_profiles → creator_wallets by profile id
+        const { result: walletResult } = await timed(
+          this.logger,
+          WALLET_SCOPE,
+          'db:creator_wallets.join_profiles_by_user_id',
+          async () =>
+            client
+              .from('creator_wallets')
+              .select(
+                'total_earned, available_balance, locked_balance, withdrawn_amount, updated_at, gift_earnings_total, call_earnings_total, creator_profiles!inner(user_id)',
+              )
+              .eq('creator_profiles.user_id', creatorId)
+              .maybeSingle(),
+        );
+
+        const { data, error } = walletResult;
 
         if (!error && data) {
+          const totalMs = Math.round(performance.now() - requestStart);
+          this.logger.log(`[${WALLET_SCOPE}] getWalletBalance total=${totalMs}ms queries=1 joins=1`);
           return {
             creatorId,
             totalEarned: Number(data.total_earned),
             availableBalance: Number(data.available_balance),
+            lockedBalance: Number((data as Record<string, unknown>).locked_balance ?? 0),
             withdrawnAmount: Number(data.withdrawn_amount),
             updatedAt: data.updated_at,
           };
         }
+
+        if (error) {
+          this.logger.warn(`[${WALLET_SCOPE}] joined wallet query error: ${error.message}`);
+        }
       } catch (e) {
-        console.warn('CreatorsService.getWalletBalance exception:', (e as Error).message);
+        this.logger.warn(
+          `[${WALLET_SCOPE}] getWalletBalance exception: ${(e as Error).message}`,
+        );
       }
     }
 

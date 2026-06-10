@@ -14,6 +14,7 @@ import {
   connectionErrorMessage,
   handleAuthFailure,
 } from '../lib/api';
+import { normalizeWithdrawalList } from '../lib/api/withdrawals';
 import { normalizeLanguages } from '../lib/format';
 import LiveDataBanner from './LiveDataBanner';
 
@@ -199,8 +200,9 @@ export default function DashboardView({ onNavigate }: DashboardViewProps) {
         })),
       );
 
+      const withdrawalPage = normalizeWithdrawalList(withdrawData);
       setWithdrawRequests(
-        withdrawData.map((w: Record<string, unknown>) => ({
+        withdrawalPage.items.map((w: Record<string, unknown>) => ({
           id: String(w.id),
           listenerId: String(w.creator_id ?? w.creatorId),
           listenerName: String(w.creator_name || 'Host'),

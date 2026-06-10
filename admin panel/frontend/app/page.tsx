@@ -1,31 +1,49 @@
 // app/page.tsx
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense, lazy, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { 
   LayoutDashboard, Users, PhoneCall, Wallet, Coins, CreditCard, 
   Bell, ShieldAlert, BarChart3, Settings, UserCheck, Search, Command, X, ArrowUpRight,
-  Sun, Moon, LogOut
+  Sun, Moon, LogOut, TrendingUp, Gift, MessageSquare, Crown, Target, Flame, Heart,
+  Award, Video, Scale, Activity, Radio, Banknote
 } from 'lucide-react';
 
-// Subviews
+// Core views (eager — frequently accessed)
 import DashboardView from '../components/DashboardView';
 import UsersView from '../components/UsersView';
 import ListenersView from '../components/ListenersView';
-import WalletView from '../components/WalletView';
-import CoinsView from '../components/CoinsView';
-import PaymentsView from '../components/PaymentsView';
-import CallsView from '../components/CallsView';
-import NotificationsView from '../components/NotificationsView';
-import SafetyView from '../components/SafetyView';
-import SettingsView from '../components/SettingsView';
-import AdminsView from '../components/AdminsView';
 import FinanceDashboard from '../components/FinanceDashboard';
 
-import { MockDatabase, User, Listener } from '../lib/mockDb';
+// Lazy-loaded modules (avoid rebuild storms)
+const WithdrawalsView = lazy(() => import('../components/modules/WithdrawalsView'));
+const CreatorAnalyticsView = lazy(() => import('../components/modules/CreatorAnalyticsView'));
+const GiftsAdminView = lazy(() => import('../components/modules/GiftsAdminView'));
+const MessagesAnalyticsView = lazy(() => import('../components/modules/MessagesAnalyticsView'));
+const VipAdminView = lazy(() => import('../components/modules/VipAdminView'));
+const MissionsView = lazy(() => import('../components/modules/MissionsView'));
+const StreaksView = lazy(() => import('../components/modules/StreaksView'));
+const FollowFavoriteView = lazy(() => import('../components/modules/FollowFavoriteView'));
+const CreatorLevelsView = lazy(() => import('../components/modules/CreatorLevelsView'));
+const TrainingVideosView = lazy(() => import('../components/modules/TrainingVideosView'));
+const ReconciliationView = lazy(() => import('../components/modules/ReconciliationView'));
+const SystemHealthView = lazy(() => import('../components/modules/SystemHealthView'));
+const OperationsCenterView = lazy(() => import('../components/modules/OperationsCenterView'));
+const WalletView = lazy(() => import('../components/WalletView'));
+const CoinsView = lazy(() => import('../components/CoinsView'));
+const PaymentsView = lazy(() => import('../components/PaymentsView'));
+const CallsView = lazy(() => import('../components/CallsView'));
+const NotificationsView = lazy(() => import('../components/NotificationsView'));
+const SafetyView = lazy(() => import('../components/SafetyView'));
+const SettingsView = lazy(() => import('../components/SettingsView'));
+const AdminsView = lazy(() => import('../components/AdminsView'));
+
+import { MockDatabase } from '../lib/mockDb';
 import { API_BASE, getHeaders } from '../lib/api';
+import { normalizeWithdrawalList } from '../lib/api/withdrawals';
 import { clearSession, getAdminUser, isAuthenticated, type AdminUser } from '../lib/auth';
+import { canAccessModule, type AdminModule } from '../lib/rbac';
 
 export default function Home() {
   const router = useRouter();
@@ -98,8 +116,8 @@ export default function Home() {
       }
 
       if (withdrawsRes.ok) {
-        const withdrawsData = await withdrawsRes.json();
-        withdrawsCount = withdrawsData.filter((w: any) => w.status === 'pending').length;
+        const withdrawsData = normalizeWithdrawalList(await withdrawsRes.json());
+        withdrawsCount = withdrawsData.items.filter((w) => w.status === 'pending').length;
       }
 
       setPendingListenersCount(pendingCount);
@@ -230,31 +248,54 @@ export default function Home() {
     }
   };
 
-  // Nav Items
-  const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'finance', label: 'Finance Dashboard', icon: BarChart3 },
-    { id: 'users', label: 'Users Directory', icon: Users },
-    { 
-      id: 'listeners', 
-      label: 'Listeners Hosts', 
-      icon: UserCheck,
-      badge: pendingListenersCount + pendingWithdrawsCount
-    },
-    { id: 'wallet', label: 'Wallet Logs', icon: Wallet },
-    { id: 'coins', label: 'Coin Packages', icon: Coins },
-    { id: 'payments', label: 'Recharge History', icon: CreditCard },
-    { id: 'calls', label: 'Call Connections', icon: PhoneCall },
-    { id: 'notifications', label: 'Notifications', icon: Bell },
-    { 
-      id: 'safety', 
-      label: 'Safety Moderation', 
-      icon: ShieldAlert,
-      badge: pendingReportsCount 
-    },
-    { id: 'settings', label: 'App Settings', icon: Settings },
-    { id: 'admins', label: 'Admin Access', icon: Users }
+  const tabToModule = (id: string): AdminModule => id as AdminModule;
+
+  const allNavItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, section: 'Overview' },
+    { id: 'operations', label: 'Operations Center', icon: Radio, section: 'Overview' },
+    { id: 'finance', label: 'Finance', icon: BarChart3, section: 'Finance' },
+    { id: 'reconciliation', label: 'Reconciliation', icon: Scale, section: 'Finance' },
+    { id: 'withdrawals', label: 'Withdrawals', icon: Banknote, badge: pendingWithdrawsCount, section: 'Finance' },
+    { id: 'creator_analytics', label: 'Creator Analytics', icon: TrendingUp, section: 'Creators' },
+    { id: 'listeners', label: 'Creator Management', icon: UserCheck, badge: pendingListenersCount, section: 'Creators' },
+    { id: 'gifts', label: 'Gifts', icon: Gift, section: 'Engagement' },
+    { id: 'messages', label: 'Paid Messages', icon: MessageSquare, section: 'Engagement' },
+    { id: 'vip', label: 'VIP Membership', icon: Crown, section: 'Engagement' },
+    { id: 'missions', label: 'Missions', icon: Target, section: 'Engagement' },
+    { id: 'streaks', label: 'Streaks', icon: Flame, section: 'Engagement' },
+    { id: 'follows', label: 'Follow / Favorite', icon: Heart, section: 'Engagement' },
+    { id: 'levels', label: 'Creator Levels', icon: Award, section: 'Engagement' },
+    { id: 'training', label: 'Training Videos', icon: Video, section: 'Content' },
+    { id: 'users', label: 'User Management', icon: Users, section: 'People' },
+    { id: 'calls', label: 'Live Calls', icon: PhoneCall, section: 'Operations' },
+    { id: 'wallet', label: 'Wallet Logs', icon: Wallet, section: 'Finance' },
+    { id: 'coins', label: 'Coin Packages', icon: Coins, section: 'Finance' },
+    { id: 'payments', label: 'Recharge History', icon: CreditCard, section: 'Finance' },
+    { id: 'health', label: 'System Health', icon: Activity, section: 'Operations' },
+    { id: 'notifications', label: 'Notifications', icon: Bell, section: 'Operations' },
+    { id: 'safety', label: 'Safety', icon: ShieldAlert, badge: pendingReportsCount, section: 'Operations' },
+    { id: 'settings', label: 'Settings', icon: Settings, section: 'System' },
+    { id: 'admins', label: 'Admin Access', icon: Users, section: 'System' },
   ];
+
+  const navItems = useMemo(
+    () => allNavItems.filter((item) => canAccessModule(adminUser, tabToModule(item.id))),
+    [adminUser, pendingListenersCount, pendingWithdrawsCount, pendingReportsCount],
+  );
+
+  const navSections = useMemo(() => {
+    const sections: { title: string; items: typeof navItems }[] = [];
+    for (const item of navItems) {
+      const section = (item as { section?: string }).section ?? 'Other';
+      let group = sections.find((s) => s.title === section);
+      if (!group) {
+        group = { title: section, items: [] };
+        sections.push(group);
+      }
+      group.items.push(item);
+    }
+    return sections;
+  }, [navItems]);
 
   if (!authReady) {
     return (
@@ -287,34 +328,41 @@ export default function Home() {
             </div>
 
             {/* Navigation Links */}
-            <nav className="p-4 space-y-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = activeTab === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => { setActiveTab(item.id); setSubTab(undefined); }}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                      isActive 
-                        ? 'bg-secondary text-foreground shadow-sm font-bold' 
-                        : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Icon size={16} className={isActive ? 'text-indigo-400' : 'text-zinc-500'} />
-                      <span>{item.label}</span>
-                    </div>
-                    {item.badge && item.badge > 0 ? (
-                      <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
-                        isActive ? 'bg-indigo-600 text-white' : 'bg-secondary text-muted-foreground'
-                      }`}>
-                        {item.badge}
-                      </span>
-                    ) : null}
-                  </button>
-                );
-              })}
+            <nav className="p-4 space-y-4 overflow-y-auto max-h-[calc(100vh-8rem)]">
+              {navSections.map((section) => (
+                <div key={section.title}>
+                  <span className="px-3 text-[9px] font-bold uppercase tracking-widest text-zinc-600">{section.title}</span>
+                  <div className="mt-1 space-y-0.5">
+                    {section.items.map((item) => {
+                      const Icon = item.icon;
+                      const isActive = activeTab === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => { setActiveTab(item.id); setSubTab(undefined); }}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                            isActive
+                              ? 'bg-secondary text-foreground shadow-sm font-bold'
+                              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/40'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <Icon size={16} className={isActive ? 'text-indigo-400' : 'text-zinc-500'} />
+                            <span>{item.label}</span>
+                          </div>
+                          {'badge' in item && item.badge && item.badge > 0 ? (
+                            <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
+                              isActive ? 'bg-indigo-600 text-white' : 'bg-secondary text-muted-foreground'
+                            }`}>
+                              {item.badge}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </nav>
           </div>
 
@@ -390,18 +438,33 @@ export default function Home() {
 
         {/* 3. MAIN CONTENTS VIEWPORT */}
         <main className="flex-1 overflow-y-auto p-6 bg-background glow-indigo transition-colors duration-200">
-          {activeTab === 'dashboard' && <DashboardView onNavigate={handleGlobalNavigate} />}
-          {activeTab === 'finance' && <FinanceDashboard />}
-          {activeTab === 'users' && <UsersView embedded selectedUserId={selectedUserId} onClearSelectedUser={() => setSelectedUserId(undefined)} />}
-          {activeTab === 'listeners' && <ListenersView onRefreshStats={refreshBadges} subTab={subTab} />}
-          {activeTab === 'wallet' && <WalletView />}
-          {activeTab === 'coins' && <CoinsView />}
-          {activeTab === 'payments' && <PaymentsView />}
-          {activeTab === 'calls' && <CallsView />}
-          {activeTab === 'notifications' && <NotificationsView />}
-          {activeTab === 'safety' && <SafetyView />}
-          {activeTab === 'settings' && <SettingsView />}
-          {activeTab === 'admins' && <AdminsView />}
+          <Suspense fallback={<div className="text-sm text-muted-foreground p-8">Loading module…</div>}>
+            {activeTab === 'dashboard' && <DashboardView onNavigate={handleGlobalNavigate} />}
+            {activeTab === 'finance' && <FinanceDashboard />}
+            {activeTab === 'operations' && <OperationsCenterView />}
+            {activeTab === 'creator_analytics' && <CreatorAnalyticsView />}
+            {activeTab === 'withdrawals' && <WithdrawalsView />}
+            {activeTab === 'gifts' && <GiftsAdminView />}
+            {activeTab === 'messages' && <MessagesAnalyticsView />}
+            {activeTab === 'vip' && <VipAdminView />}
+            {activeTab === 'missions' && <MissionsView />}
+            {activeTab === 'streaks' && <StreaksView />}
+            {activeTab === 'follows' && <FollowFavoriteView />}
+            {activeTab === 'levels' && <CreatorLevelsView />}
+            {activeTab === 'training' && <TrainingVideosView />}
+            {activeTab === 'reconciliation' && <ReconciliationView />}
+            {activeTab === 'health' && <SystemHealthView />}
+            {activeTab === 'users' && <UsersView embedded selectedUserId={selectedUserId} onClearSelectedUser={() => setSelectedUserId(undefined)} />}
+            {activeTab === 'listeners' && <ListenersView onRefreshStats={refreshBadges} subTab={subTab} />}
+            {activeTab === 'wallet' && <WalletView />}
+            {activeTab === 'coins' && <CoinsView />}
+            {activeTab === 'payments' && <PaymentsView />}
+            {activeTab === 'calls' && <CallsView />}
+            {activeTab === 'notifications' && <NotificationsView />}
+            {activeTab === 'safety' && <SafetyView />}
+            {activeTab === 'settings' && <SettingsView />}
+            {activeTab === 'admins' && <AdminsView />}
+          </Suspense>
         </main>
       </div>
 

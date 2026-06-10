@@ -133,7 +133,7 @@ class TestIdempotency:
 
 
 class TestSupabaseRpcExposure:
-  """CRITICAL: send_gift must NOT be callable via anon/authenticated PostgREST."""
+    """CRITICAL: send_gift must NOT be callable via anon/authenticated PostgREST."""
 
     @pytest.mark.skipif(
         not __import__("os").environ.get("SUPABASE_URL"),

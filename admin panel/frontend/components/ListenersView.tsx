@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { MockDatabase, Listener, WithdrawRequest } from '../lib/mockDb';
 import { API_BASE, getHeaders } from '../lib/api';
+import { normalizeWithdrawalList } from '../lib/api/withdrawals';
 
 interface ListenersViewProps {
   onRefreshStats?: () => void;
@@ -50,7 +51,7 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
         const pendingData = await pendingRes.json();
         const suspendedData = await suspendedRes.json();
         const rejectedData = await rejectedRes.json();
-        const withdrawsData = await withdrawsRes.json();
+        const withdrawsData = normalizeWithdrawalList(await withdrawsRes.json());
 
         const combinedCreators = [
           ...activeData.map((c: any) => ({ ...c, status: 'active' })),
@@ -93,7 +94,7 @@ export default function ListenersView({ onRefreshStats, subTab = 'active' }: Lis
         }));
 
         setListeners(combinedCreators);
-        setWithdraws(withdrawsData.map((w: any) => ({
+        setWithdraws(withdrawsData.items.map((w: any) => ({
           id: w.id,
           listenerId: w.creator_id,
           listenerName: w.creator_name || 'Host',

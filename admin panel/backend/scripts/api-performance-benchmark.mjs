@@ -94,7 +94,7 @@ const ENDPOINTS = (token) => [
 
   // Gift
   { category: 'Gift', name: 'GET /gifts', fn: () => api('GET', '/gifts', token) },
-  { category: 'Gift', name: 'GET /gifts/history', fn: () => api('GET', '/gifts/history', token) },
+  // gifts/history requires app-user JWT — admin token correctly returns 403
   { category: 'Gift', name: 'GET /listener/gifts/stats', fn: () => api('GET', '/listener/gifts/stats', token) },
   { category: 'Gift', name: 'GET /admin/gifts/analytics', fn: () => api('GET', '/admin/gifts/analytics', token) },
 
